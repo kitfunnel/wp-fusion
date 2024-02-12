@@ -71,9 +71,14 @@ class WPF_Woo_Memberships_Teams extends WPF_Integrations_Base {
 			return;
 		}
 
-		// Sync name.
+		// Sync name and ID.
 
-		wp_fusion()->user->push_user_meta( $member->get_id(), array( 'wc_memberships_for_teams_team_name' => $team->get_name() ) );
+		$update_data = array(
+			'wc_memberships_for_teams_team_name' => $team->get_name(),
+			'wc_memberships_for_teams_team_id'   => $team->get_id(),
+		);
+
+		wp_fusion()->user->push_user_meta( $member->get_id(), $update_data );
 
 		$product = $team->get_product();
 
@@ -275,7 +280,14 @@ class WPF_Woo_Memberships_Teams extends WPF_Integrations_Base {
 			'label'  => 'Memberships for Teams Team Name',
 			'type'   => 'text',
 			'group'  => 'woocommerce_memberships',
-			'pseudo' => true
+			'pseudo' => true,
+		);
+
+		$meta_fields['wc_memberships_for_teams_team_id'] = array(
+			'label'  => 'Memberships for Teams Team ID',
+			'type'   => 'int',
+			'group'  => 'woocommerce_memberships',
+			'pseudo' => true,
 		);
 
 		return $meta_fields;
@@ -356,6 +368,7 @@ class WPF_Woo_Memberships_Teams extends WPF_Integrations_Base {
 		$update_data = array(
 			'wc_memberships_for_teams_team_role' => $team_member->get_role(),
 			'wc_memberships_for_teams_team_name' => $team_member->get_team()->get_name(),
+			'wc_memberships_for_teams_team_id'   => $team_id,
 		);
 
 		wp_fusion()->user->push_user_meta( $user_id, $update_data );

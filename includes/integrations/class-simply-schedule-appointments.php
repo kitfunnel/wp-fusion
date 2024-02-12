@@ -160,23 +160,16 @@ class WPF_Simply_Schedule_Appointments extends WPF_Integrations_Base {
 		$user_data        = $appointment_data['customer_information'];
 
 		$update_data = array(
-			'user_email'             => $user_data['Email'],
-			'phone'                  => ( isset( $user_data['Phone'] ) ? $user_data['Phone'] : '' ),
-			'address'                => ( isset( $user_data['Address'] ) ? $user_data['Address'] : '' ),
-			'city'                   => ( isset( $user_data['City'] ) ? $user_data['City'] : '' ),
-			'state'                  => ( isset( $user_data['State'] ) ? $user_data['State'] : '' ),
-			'zip'                    => ( isset( $user_data['Zip'] ) ? $user_data['Zip'] : '' ),
-			'notes'                  => ( isset( $user_data['Notes'] ) ? $user_data['Notes'] : '' ),
-			'description'            => ( isset( $appointment_data['description'] ) ? $appointment_data['description'] : '' ),
-			'web_meeting_url'        => ( isset( $appointment_data['web_meeting_url'] ) ? $appointment_data['web_meeting_url'] : '' ),
-			'customer_timezone'      => $appointment_data['customer_timezone'],
-			'start_date'             => $appointment_data['start_date'],
-			'end_date'               => $appointment_data['end_date'],
-			'appointment_type_title' => $appointment_data['appointment_type_title'],
-			'price_full'             => $appointment_data['price_full'],
-			'payment_method'         => $appointment_data['payment_method'],
-			'status'                 => $appointment_data['status'],
+			'user_email' => $user_data['Email'],
+			'phone'      => ( isset( $user_data['Phone'] ) ? $user_data['Phone'] : '' ),
+			'address'    => ( isset( $user_data['Address'] ) ? $user_data['Address'] : '' ),
+			'city'       => ( isset( $user_data['City'] ) ? $user_data['City'] : '' ),
+			'state'      => ( isset( $user_data['State'] ) ? $user_data['State'] : '' ),
+			'zip'        => ( isset( $user_data['Zip'] ) ? $user_data['Zip'] : '' ),
+			'notes'      => ( isset( $user_data['Notes'] ) ? $user_data['Notes'] : '' ),
 		);
+
+		$update_data = array_merge( $update_data, $appointment_data );
 
 		$name                      = explode( ' ', $user_data['Name'] );
 		$update_data['first_name'] = $name[0];

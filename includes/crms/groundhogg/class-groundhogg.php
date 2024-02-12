@@ -3,10 +3,34 @@
 class WPF_Groundhogg {
 
 	/**
+	 * The integration slug.
+	 *
+	 * @since 3.22.0
+	 * @var string $slug The slug.
+	 */
+	public $slug = 'groundhogg';
+
+	/**
+	 * The integration name.
+	 *
+	 * @since 3.22.0
+	 * @var string $name The name.
+	 */
+	public $name = 'Groundhogg';
+
+	/**
+	 * The integration's menu name.
+	 *
+	 * @since 3.22.0
+	 * @var string $name The name.
+	 */
+	public $menu_name = 'Groundhogg (This Site)';
+
+	/**
 	 * Lets pluggable functions know which features are supported by the CRM
 	 */
 
-	public $supports;
+	public $supports = array( 'events', 'add_tags_api', 'same_site' );
 
 	/**
 	 * Lets us link directly to editing a contact record.
@@ -26,13 +50,6 @@ class WPF_Groundhogg {
 	 */
 
 	public function __construct() {
-
-		$this->slug      = 'groundhogg';
-		$this->name      = 'Groundhogg';
-		$this->menu_name = 'Groundhogg (This Site)';
-		$this->supports  = array( 'events', 'add_tags_api' );
-
-		// $this->supports = array( 'add_tags' ); // Removed in 3.35.10
 
 		// Set up admin options
 		if ( is_admin() ) {
@@ -70,6 +87,7 @@ class WPF_Groundhogg {
 		// Disable the API queue
 
 		add_filter( 'wpf_get_setting_enable_queue', '__return_false' );
+		add_filter( 'wpf_configure_settings', array( $this, 'hide_api_queue_setting' ) );
 
 		add_filter( 'wpf_format_field_value', array( $this, 'format_field_value' ), 10, 3 );
 		add_filter( 'wpf_apply_tags', array( $this, 'create_new_tags' ) );
@@ -81,6 +99,9 @@ class WPF_Groundhogg {
 		remove_action( 'user_register', array( \Groundhogg\Plugin::instance()->user_syncing, 'sync_new_user' ) );
 		remove_action( 'profile_update', array( \Groundhogg\Plugin::instance()->user_syncing, 'sync_existing_user' ) );
 
+		// Syncs GH tags with the WP User.
+		add_action( 'wpf_user_created', array( $this, 'user_registered' ), 10, 2 );
+
 		add_action( 'groundhogg/contact/tag_applied', array( $this, 'tag_applied' ), 10, 2 );
 		add_action( 'groundhogg/contact/tag_removed', array( $this, 'tag_removed' ), 10, 2 );
 		add_action( 'groundhogg/admin/contact/save', array( $this, 'contact_post_update' ), 10, 2 );
@@ -89,6 +110,9 @@ class WPF_Groundhogg {
 		// Tags.
 		add_action( 'groundhogg/db/post_insert/tag', array( $this, 'tag_created' ) );
 		add_action( 'groundhogg/db/post_delete/tag', array( $this, 'tag_deleted' ) );
+
+		// Custom fields.
+		add_action( 'update_option_gh_contact_custom_properties', array( $this, 'sync_crm_fields' ), 10, 2 );
 
 		add_filter( 'wpf_map_meta_fields', array( $this, 'fix_consent_fields_dates' ), 10, 2 );
 
@@ -152,6 +176,21 @@ class WPF_Groundhogg {
 		}
 
 		return true;
+
+	}
+
+	/**
+	 * The API queue is unnecessary for Groundhogg on the same site so we'll hide it.
+	 *
+	 * @since 3.41.26
+	 *
+	 * @param array $settings The settings.
+	 * @return array The settings.
+	 */
+	public function hide_api_queue_setting( $settings ) {
+
+		unset( $settings['enable_queue'] );
+		return $settings;
 
 	}
 
@@ -247,17 +286,34 @@ class WPF_Groundhogg {
 
 	}
 
+	/**
+	 * Loads tags applied by Groundhogg during user registration back to the WPF cache.
+	 *
+	 * @since 3.41.16
+	 *
+	 * @param int $user_id    The user ID.
+	 * @param int $contact_id The contact ID.
+	 */
+	public function user_registered( $user_id, $contact_id ) {
+
+		$tags = $this->get_tags( $contact_id );
+
+		wp_fusion()->user->set_tags( $tags, $user_id );
+
+	}
+
 
 	/**
 	 * Update WPF tags when tags applied in Groundhogg
 	 *
+	 * @since 3.41.16
 	 * @access  public
-	 * @return  void
+	 * @param object $contact The Groundhogg Contact object.
+	 * @param mixed  $tag_id The ID of the tag applied.
 	 */
-
 	public function tag_applied( $contact, $tag_id ) {
 
-		// This action triggers apply_tags_to_contact_from_new_roles in GH and can create a situation where recently applied tags get overwritten
+		// This action triggers apply_tags_to_contact_from_new_roles in GH and can create a situation where recently applied tags get overwritten.
 		if ( did_action( 'add_user_role' ) > 0 || did_action( 'set_user_role' ) > 0 ) {
 			return;
 		}
@@ -436,7 +492,7 @@ class WPF_Groundhogg {
 	 * @return array CRM Fields
 	 */
 
-	public function sync_crm_fields() {
+	public function sync_crm_fields( $old_value = false, $value = false ) {
 
 		$crm_fields = array();
 
@@ -458,7 +514,13 @@ class WPF_Groundhogg {
 		// Custom fields (since 3.40.40).
 
 		if ( class_exists( 'Groundhogg\Properties' ) ) {
-			$additional_fields = Groundhogg\Properties::instance()->get_fields();
+
+			if ( false === $value ) {
+				$additional_fields = Groundhogg\Properties::instance()->get_fields();
+			} else {
+				// gh_contact_custom_properties option was just updated.
+				$additional_fields = $value['fields'];
+			}
 
 			if ( ! empty( $additional_fields ) ) {
 				foreach ( $additional_fields as $field ) {
@@ -588,8 +650,10 @@ class WPF_Groundhogg {
 
 		// If we're creating a contact from a user, pass that through.
 
-		if ( ! empty( $data['user_id'] ) ) {
-			$user_id = $data['user_id'];
+		$user = get_user_by( 'email', $data['email'] );
+
+		if ( $user ) {
+			$data['user_id'] = $user->ID;
 		}
 
 		// Set to opted in by default unless otherwise specified.
@@ -625,11 +689,8 @@ class WPF_Groundhogg {
 
 		// Trigger user created benchmarks.
 
-		if ( isset( $user_id ) ) {
-
-			$user = get_userdata( $user_id );
+		if ( $user ) {
 			do_action( 'groundhogg/contact_created_from_user', $user, $contact );
-
 		}
 
 		return $id;

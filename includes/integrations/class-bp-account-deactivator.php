@@ -22,7 +22,7 @@ class WPF_BP_Account_Deactivator extends WPF_Integrations_Base {
 	 * @since 3.38.14
 	 * @var string $name
 	 */
-	public $name = 'Bp account deactivator';
+	public $name = 'BP Account Deactivator';
 
 	/**
 	 * The link to the documentation on the WP Fusion website.

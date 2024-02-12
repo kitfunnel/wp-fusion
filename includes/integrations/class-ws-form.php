@@ -261,7 +261,7 @@ class WPF_WS_Form extends WS_Form_Action {
 
 		// Array to delimited
 		if ( is_array( $value ) ) {
-			$value = implode( ',', $wpf_value );
+			$value = implode( ', ', $value );
 		}
 
 		// Check for email address

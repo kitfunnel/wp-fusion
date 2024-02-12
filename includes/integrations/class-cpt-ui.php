@@ -80,11 +80,15 @@ class WPF_CPT_UI extends WPF_Integrations_Base {
 
 		$settings = wpf_get_option( 'post_type_rules', array() );
 
-		if ( ! isset( $settings[ $current['name'] ] ) ) {
-			$settings[ $current['name'] ] = array();
+		if ( isset( $current ) ) {
+			if ( ! isset( $settings[ $current['name'] ] ) ) {
+				$settings[ $current['name'] ] = array();
+			}
+			$settings = array_merge( $defaults, $settings[ $current['name'] ] );
+		} else {
+			$settings = $defaults;
 		}
 
-		$settings = array_merge( $defaults, $settings[ $current['name'] ] );
 
 		echo '<div id="wpf-center-meta" class="wpf-meta cptui-section postbox">';
 		echo '<h2 class="handle">WP Fusion</h2>';

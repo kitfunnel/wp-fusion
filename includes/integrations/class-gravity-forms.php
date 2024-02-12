@@ -15,7 +15,6 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 	protected $_title                    = 'CRM Integration';
 	protected $_short_title              = 'WP Fusion';
 	protected $postvars                  = array();
-	public $feed_lists;
 
 	protected $_capabilities_settings_page = array( 'manage_options' );
 	protected $_capabilities_form_settings = array( 'manage_options' );
@@ -151,7 +150,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 			}
 		}
 
-		// Tidy up some stuff before field mapping
+		// Tidy up some stuff before field mapping.
 
 		foreach ( $entry as $field_id => $value ) {
 
@@ -189,7 +188,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 			if ( isset( $entry[ $id ] ) && ( ! empty( $entry[ $id ] ) || $entry[ $id ] == 0 ) && ! empty( $data['crm_field'] ) ) {
 
-				if ( 'multiselect' == $data['type'] && is_string( $entry[ $id ] ) && 0 === strpos( $entry[ $id ], '[' ) ) {
+				if ( ( 'multiselect' === $data['type'] || 'image_hopper' === $data['type'] ) && is_string( $entry[ $id ] ) && 0 === strpos( $entry[ $id ], '[' ) ) {
 
 					// Convert multiselects into array format
 					$entry[ $id ] = str_replace( '"', '', $entry[ $id ] );
@@ -202,7 +201,9 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 					$entry[ $id ] = explode( ',', $entry[ $id ] );
 
-				} elseif ( 'multiselect' == $data['type'] && is_array( $entry[ $id ] ) ) {
+					$entry[ $id ] = wp_unslash( $entry[ $id ] ); // unslash URLs.
+
+				} elseif ( 'multiselect' === $data['type'] && is_array( $entry[ $id ] ) ) {
 
 					// GForms has associative arrays sometimes for some reason
 
@@ -248,19 +249,9 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 			if ( strpos( $id, '{' ) === 0 && ! empty( $data['crm_field'] ) ) {
 				$value = GFCommon::replace_variables( $id, $form, $entry );
 				if ( ! empty( $value ) ) {
-					$update_data[ $data['crm_field'] ] = $value;
+					$update_data[ $data['crm_field'] ] = apply_filters( 'wpf_format_field_value', $value, $data['type'], $data['crm_field'] );
 				}
 			}
-		}
-
-		// Possibly deal with lists if the CRM supports it
-		if ( isset( $feed['meta']['wpf_lists'] ) && ! empty( $feed['meta']['wpf_lists'] ) ) {
-
-			$this->feed_lists = $feed['meta']['wpf_lists'];
-
-			add_filter( 'wpf_add_contact_lists', array( $this, 'filter_lists' ) );
-			add_filter( 'wpf_update_contact_lists', array( $this, 'filter_lists' ) );
-
 		}
 
 		if ( ! isset( $feed['meta']['wpf_tags'] ) ) {
@@ -271,6 +262,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 			'email_address'    => $email_address,
 			'update_data'      => $update_data,
 			'apply_tags'       => (array) $feed['meta']['wpf_tags'],
+			'apply_lists'      => isset( $feed['meta']['wpf_lists'] ) ? $feed['meta']['wpf_lists'] : array(),
 			'auto_login'       => ! empty( $feed['meta']['auto_login'] ),
 			'integration_slug' => 'gform',
 			'integration_name' => 'Gravity Forms',
@@ -466,8 +458,12 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 			if ( $field->inputs == null ) {
 
 				// Handing for simple fields (no subfields)
-				if ( $field->type == 'email' ) {
+				if ( 'email' === $field->type ) {
 					$email_found = true;
+				}
+
+				if ( 'image_hopper' === $field->type ) {
+					$field->type = 'multiselect';
 				}
 
 				$label = $field->label;
@@ -645,6 +641,12 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 		foreach ( $tags['other']['tags'] as $tag ) {
 
+			if ( false !== strpos( $tag['tag'], 'date' ) ) {
+				$tag['type'] = 'date';
+			} else {
+				$tag['type'] = 'text';
+			}
+
 			echo '<tr>';
 			echo '<td><label>' . $tag['label'] . '<label></td>';
 			echo '<td><i class="fa fa-angle-double-right"></i></td>';
@@ -658,7 +660,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 				array(
 					'label'         => '',
 					'name'          => 'wpf_fields[' . $tag['tag'] . '][type]',
-					'default_value' => 'text',
+					'default_value' => $tag['type'],
 				)
 			);
 
@@ -670,7 +672,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 		echo '</tbody>';
 		echo '</table>';
 
-		if ( $email_found == false ) {
+		if ( ! $email_found ) {
 			echo '<div class="alert danger"><strong>Warning:</strong> No <i>email</i> type field found on this form. Entries from guest users will not be sent to ' . wp_fusion()->crm->name . '.</div>';
 		}
 
@@ -747,18 +749,6 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 	}
 
-	/**
-	 * Overrides the default lists with those present on the form, if applicable
-	 *
-	 * @access  public
-	 * @return  array Lists
-	 */
-
-	public function filter_lists( $lists ) {
-
-		return $this->feed_lists;
-
-	}
 
 	/**
 	 * Defines settings for the feed
@@ -769,31 +759,30 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 	public function feed_settings_fields() {
 
-		$fields = array();
-
-		$fields['feed_settings'] = array(
-			'title'       => esc_html__( 'Feed Settings', 'wp-fusion' ),
-			'description' => '',
-			'fields'      => array(
-				'feed_name' => array(
-					'label'   => __( 'Feed Name', 'wp-fusion' ),
-					'type'    => 'text',
-					'name'    => 'feedName',
-					'tooltip' => __( 'Enter a name to remember this feed by.', 'wp-fusion' ),
-					'class'   => 'small',
+		$fields = array(
+			array(
+				'title'       => esc_html__( 'Feed Settings', 'wp-fusion' ),
+				'description' => '',
+				'fields'      => array(
+					array(
+						'label'   => __( 'Feed Name', 'wp-fusion' ),
+						'type'    => 'text',
+						'name'    => 'feedName',
+						'tooltip' => __( 'Enter a name to remember this feed by.', 'wp-fusion' ),
+						'class'   => 'small',
+					),
 				),
 			),
-		);
-
-		$fields['wpf_fields'] = array(
-			'title'       => esc_html__( 'Field Mapping', 'wp-fusion' ),
-			'description' => '',
-			'fields'      => array(
-				'wpf_fields' => array(
-					'name'          => 'wpf_fields',
-					'type'          => 'wpf_fields',
-					'tooltip'       => __( 'Select a CRM field from the dropdown, or leave blank to disable sync', 'wp-fusion' ),
-					'save_callback' => array( $this, 'save_wpf_fields' ),
+			array(
+				'title'       => esc_html__( 'Field Mapping', 'wp-fusion' ),
+				'description' => '',
+				'fields'      => array(
+					array(
+						'name'          => 'wpf_fields',
+						'type'          => 'wpf_fields',
+						'tooltip'       => __( 'Select a CRM field from the dropdown, or leave blank to disable sync', 'wp-fusion' ),
+						'save_callback' => array( $this, 'save_wpf_fields' ),
+					),
 				),
 			),
 		);
@@ -814,7 +803,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 		if ( $options_found ) {
 
-			$fields['wpf_fields']['fields']['sync_labels'] = array(
+			$fields[1]['fields'][] = array(
 				'type'    => 'checkbox',
 				'name'    => 'sync_labels',
 				'label'   => __( 'Sync Labels', 'wp-fusion' ),
@@ -829,10 +818,10 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 		}
 
-		$fields['additional_options'] = array(
+		$fields[2] = array(
 			'title'  => esc_html__( 'Additional Options', 'wp-fusion' ),
 			'fields' => array(
-				'wpf_tags' => array(
+				array(
 					'name'    => 'wpf_tags',
 					'label'   => __( 'Apply Tags', 'wp-fusion' ),
 					'type'    => 'wpf_tags',
@@ -841,9 +830,9 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 			),
 		);
 
-		if ( in_array( 'add_lists', wp_fusion()->crm->supports ) ) {
+		if ( in_array( 'lists', wp_fusion()->crm->supports ) ) {
 
-			$fields['additional_options']['fields']['add_lists'] = array(
+			$fields[2]['fields'][] = array(
 				'name'    => 'wpf_lists',
 				'label'   => 'Add to Lists',
 				'type'    => 'wpf_lists',
@@ -851,7 +840,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 			);
 		}
 
-		$fields['additional_options']['fields']['auto_login'] = array(
+		$fields[2]['fields'][] = array(
 			'type'    => 'checkbox',
 			'name'    => 'auto_login',
 			'label'   => __( 'Auto Login', 'wp-fusion' ),
@@ -864,7 +853,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 			),
 		);
 
-		$fields['feed_condition'] = array(
+		$fields[3] = array(
 			'title'  => esc_html__( 'Feed Conditions', 'wp-fusion' ),
 			'fields' => array(),
 		);
@@ -875,7 +864,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 		foreach ( GFAPI::get_feeds( null, $_GET['id'] ) as $feed ) {
 
 			if ( isset( $feed['addon_slug'] ) ) {
-				if ( in_array( $feed['addon_slug'], array( 'gravityformsstripe', 'gravityformspaypal', 'gravityformsppcp' ) ) ) {
+				if ( in_array( $feed['addon_slug'], array( 'gravityformsstripe', 'gravityformspaypal', 'gravityformsppcp', 'gs-product-configurator' ) ) ) {
 					$has_payments = true;
 					break;
 				}
@@ -885,7 +874,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 		if ( $has_payments ) {
 
-			$fields['feed_condition']['fields']['payment_status'] = array(
+			$fields[3]['fields'][] = array(
 				'name'          => 'payment_status',
 				'label'         => 'Payment Status',
 				'type'          => 'radio',
@@ -908,7 +897,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 
 		}
 
-		$fields['feed_condition']['fields']['field_condition'] = array(
+		$fields[3]['fields'][] = array(
 			'type'           => 'feed_condition',
 			'name'           => 'condition',
 			'label'          => esc_html__( 'Opt-In Condition', 'wp-fusion' ),
@@ -1379,6 +1368,26 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 	}
 
 	/**
+	 * Delayed feeds.
+	 *
+	 * Some addons (like Gravity Perks product configurator) set the feed to run "delayed"
+	 * so it isn't processed until the order is received. Let's WP Fusion run after
+	 * those processes have completed.
+	 *
+	 * @since 3.41.45
+	 *
+	 * @link https://docs.gravityforms.com/add-delayed-payment-support-feed-add/
+	 *
+	 * @param array $feed  The feed object currently being processed.
+	 * @param array $entry The entry currently being viewed/edited.
+	 * @param array $form  The form object used to process the current entry.
+	 */
+	public function delay_feed( $feed, $entry, $form ) {
+
+		$this->process_feed( $feed, $entry, $form );
+	}
+
+	/**
 	 * Return the plugin's icon for the plugin/form settings menu.
 	 *
 	 * @since 3.37.21
@@ -1429,6 +1438,28 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 	public function frontend_conditional_operators( $form ) {
 
 		if ( ! wpf_is_user_logged_in() || is_admin() || ( defined( 'REST_REQUEST' ) && REST_REQUEST ) || wp_is_json_request() ) {
+			return;
+		}
+
+		$proceed = false;
+
+		// Check if the form has any WP Fusion conditional logic rules.
+
+		foreach ( $form['fields'] as $field ) {
+
+			if ( ! empty( $field->{'conditionalLogic'} ) ) {
+
+				foreach ( $field->{'conditionalLogic'}['rules'] as $rule ) {
+
+					if ( 'wpfusion' === $rule['fieldId'] ) {
+						$proceed = true;
+						break 2;
+					}
+				}
+			}
+		}
+
+		if ( ! $proceed ) {
 			return;
 		}
 
@@ -1483,6 +1514,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 	public function admin_conditional_operators() {
 
 		if ( method_exists( 'GFForms', 'is_gravity_page' ) && GFForms::is_gravity_page() ) {
+
 			?>
 			<script type="text/javascript">
 

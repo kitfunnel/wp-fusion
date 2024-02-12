@@ -112,6 +112,14 @@ class WPF_Divi extends WPF_Integrations_Base {
 					'toggle_slug' => 'visibility',
 					'description' => __( 'Enter a comma-separated list of tag names or IDs that are required to view this element.', 'wp-fusion' ),
 				);
+				
+				$fields_list['wpf_tags_not'] = array(
+					'label'       => sprintf( __( 'Required %s Tags (Not)', 'wp-fusion' ), wp_fusion()->crm->name ),
+					'type'        => 'text',
+					'tab_slug'    => 'custom_css',
+					'toggle_slug' => 'visibility',
+					'description' => __( 'Enter a comma-separated list of tag names or IDs. If the user is logged in and has any of these tags, the content will be hidden.', 'wp-fusion' ),
+				);
 
 				$modules[ $module_slug ]->fields_unprocessed = $fields_list;
 			}
@@ -129,10 +137,10 @@ class WPF_Divi extends WPF_Integrations_Base {
 	 *
 	 * @return  array Shortcode atts
 	 */
-
+	
 	public function shortcode_attributes( $props, $attrs, $render_slug, $_address, $content ) {
-
-		if ( ! empty( $attrs['wpf_tag'] ) ) {
+		
+		if ( ! empty( $attrs['wpf_tag'] ) || ! empty( $attrs['wpf_tags_not'] ) ) {
 
 			$can_access = true;
 
@@ -141,19 +149,36 @@ class WPF_Divi extends WPF_Integrations_Base {
 				$can_access = true;
 
 			} else {
+					
+				// If Requied Tags
+				if ( ! empty( $attrs['wpf_tag'] ) ) {
+					if ( ! wpf_is_user_logged_in() ) {
 
-				if ( ! wpf_is_user_logged_in() ) {
-
-					$can_access = false;
-
-				} else {
-
-					$required_tags = explode( ',', $attrs['wpf_tag'] );
-
-					if ( ! wpf_has_tag( $required_tags ) ) {
 						$can_access = false;
+
+					} else {
+					
+					 	$required_tags = explode( ',', $attrs['wpf_tag'] );
+	 	
+						if ( ! wpf_has_tag( $required_tags ) ) {
+							$can_access = false;
+						} 
+
 					}
 				}
+					
+				// If Requied NOT Tags
+				if ( ! empty( $attrs['wpf_tags_not'] ) ) {
+				     
+					$required_tags_not = explode( ',', $attrs['wpf_tags_not'] );
+
+					if ( wpf_has_tag( $required_tags_not ) ) {
+						$can_access = false;
+					} 
+					
+				}
+				
+	
 			}
 
 			$can_access = apply_filters( 'wpf_user_can_access', $can_access, wpf_get_current_user_id(), false );
@@ -163,10 +188,10 @@ class WPF_Divi extends WPF_Integrations_Base {
 			if ( false === $can_access ) {
 				$props['disabled'] = 'on';
 			}
+
 		}
-
+		
 		return $props;
-
 	}
 
 }

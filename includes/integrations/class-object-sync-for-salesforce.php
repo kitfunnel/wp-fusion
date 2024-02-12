@@ -139,6 +139,10 @@ class WPF_Object_Sync_Salesforce extends WPF_Integrations_Base {
 
 		preg_match( '/^https?:\/\/[^\/]+\.com/', wp_fusion()->crm->auth_url, $matches );
 
+		if ( ! $matches ) {
+			return array();
+		}
+
 		$base_url = $matches[0];
 
 		$options = array(

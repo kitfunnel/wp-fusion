@@ -36,10 +36,15 @@ class WPF_Formidable_Forms extends FrmFormAction {
 			'limit'    => 99,
 			'active'   => true,
 			'priority' => 25,
-			'event'    => array( 'create', 'update' ),
+			'event'    => array( 'create', 'update', 'payment-success', 'payment-failed', 'payment-future-cancel', 'payment-canceled' ),
 			'tooltip'  => sprintf( __( 'Add to %s', 'wp-fusion' ), wp_fusion()->crm->name ),
 			'color'    => 'var(--primary-hover)',
 		);
+
+		$options['event'][] = 'payment-success';
+		$options['event'][] = 'payment-failed';
+		$options['event'][] = 'payment-future-cancel';
+		$options['event'][] = 'payment-canceled';
 
 		$this->FrmFormAction( 'wpfusion', 'WP Fusion', $action_ops );
 
@@ -47,9 +52,13 @@ class WPF_Formidable_Forms extends FrmFormAction {
 		add_filter( 'frm_add_form_settings_section', array( $this, 'add_settings_tab' ), 10, 2 );
 		add_filter( 'frm_form_options_before_update', array( $this, 'save_form_settings' ), 20, 2 );
 
-		// Send entry data
+		// Send entry data by trigger.
 		add_action( 'frm_trigger_wpfusion_create_action', array( $this, 'after_action_triggered' ), 10, 3 );
 		add_action( 'frm_trigger_wpfusion_update_action', array( $this, 'after_action_triggered' ), 10, 3 );
+		add_action( 'frm_trigger_wpfusion_payment-success_action', array( $this, 'after_action_triggered' ), 10, 3 );
+		add_action( 'frm_trigger_wpfusion_payment-failed_action', array( $this, 'after_action_triggered' ), 10, 3 );
+		add_action( 'frm_trigger_wpfusion_payment-future-cancel_action', array( $this, 'after_action_triggered' ), 10, 3 );
+		add_action( 'frm_trigger_wpfusion_payment-canceled_action', array( $this, 'after_action_triggered' ), 10, 3 );
 
 		// User profile updates
 		add_action( 'frmreg_after_create_user', array( $this, 'after_create_user' ), 10, 2 );
@@ -80,12 +89,14 @@ class WPF_Formidable_Forms extends FrmFormAction {
 	}
 
 	/**
-	 * Display action settings row
+	 * Form.
+	 * Display action settings row.
 	 *
-	 * @access  public
-	 * @return  array Sections
+	 * @since 3.41.45 Added city, state, zip, country fields.
+	 *
+	 * @param object $form_action form action.
+	 * @param array  $args arguments.
 	 */
-
 	public function form( $form_action, $args = array() ) {
 
 		extract( $args );
@@ -100,7 +111,7 @@ class WPF_Formidable_Forms extends FrmFormAction {
 
 		$settings = array_merge( $defaults, $settings );
 
-		$form_fields = FrmField::getAll( 'fi.form_id=' . (int) $args['form']->id . " and fi.type not in ('break', 'divider', 'html', 'captcha', 'form')", 'field_order' );
+		$form_fields = FrmField::getAll( 'fi.form_id=' . (int) $args['form']->id . " and fi.type not in ('break', 'divider', 'end_divider', 'gateway', 'html', 'captcha', 'form')", 'field_order' );
 
 		?>
 		<h3 style="padding-top: 20px;"><?php _e( 'Field Mapping', 'wp-fusion' ); ?>
@@ -115,26 +126,59 @@ class WPF_Formidable_Forms extends FrmFormAction {
 			<?php
 			foreach ( $form_fields as $field ) :
 
-				if ( ! isset( $settings['contact_fields'][ $field->id ] ) ) {
-					$settings['contact_fields'][ $field->id ] = array( 'crm_field' => false );
+				// Getting address fields from address. They're stored in default_value.
+				// We can check if the field isn't the billing field by checking if the field_order is the same as the field id.
+				if ( ! empty( $field->default_value ) ) {
+
+					foreach ( $field->default_value as $slug => $value ) {
+
+						$field_id   = $field->id . '_' . $slug;
+						$field_name = $field->name . ' - ' . $field->field_options[ $slug . '_desc' ];
+
+						// Since the address fields don't have unique ids, we'll use the slug, and format it for display.
+						if ( ! isset( $settings['contact_fields'][ $field_id ] ) ) {
+							$settings['contact_fields'][ $field_id ] = array( 'crm_field' => false );
+						}
+						?>
+						<tr>
+							<td width="100px">
+								<label><?php echo esc_html( $field_name ); ?></label>
+							</td>
+							<td width="15px">&raquo;</td>
+							<td>
+								<?php
+								wpf_render_crm_field_select( $settings['contact_fields'][ $field_id ]['crm_field'], $action_control->get_field_name( 'contact_fields' ), $field_id );
+								?>
+							</td>
+						</tr>
+						<?php
+					}
+				} else {
+
+					// Fields without subfields.
+
+					if ( ! isset( $settings['contact_fields'][ $field->id ] ) ) {
+						$settings['contact_fields'][ $field->id ] = array( 'crm_field' => false );
+					}
+
+					?>
+
+					<tr>
+						<td width="100px">
+							<label><?php echo FrmAppHelper::truncate( $field->name, 40 ); ?></label>
+						</td>
+						<td width="15px">&raquo;</td>
+						<td>
+							<?php
+							wpf_render_crm_field_select( $settings['contact_fields'][ $field->id ]['crm_field'], $action_control->get_field_name( 'contact_fields' ), $field->id );
+							?>
+						</td>
+					</tr>
+					<?php
 				}
 
-				?>
-
-				<tr>
-					<td width="100px">
-						<label><?php echo FrmAppHelper::truncate( $field->name, 40 ); ?></label>
-					</td>
-					<td width="15px">&raquo;</td>
-					<td>
-						<?php
-
-						wpf_render_crm_field_select( $settings['contact_fields'][ $field->id ]['crm_field'], $action_control->get_field_name( 'contact_fields' ), $field->id );
-						?>
-					</td>
-				</tr>
-
-			<?php endforeach; ?>
+			endforeach;
+			?>
 
 		</table>
 
@@ -162,12 +206,15 @@ class WPF_Formidable_Forms extends FrmFormAction {
 	}
 
 	/**
-	 * Prepare form data (action method)
+	 * After Action Triggered.
+	 * Prepare form data (action method).
 	 *
-	 * @access  public
-	 * @return  void
+	 * @since 3.41.45 Added city, state, zip, country fields.
+	 *
+	 * @param object $action form action.
+	 * @param object $entry form entry.
+	 * @param object $form form.
 	 */
-
 	public function after_action_triggered( $action, $entry, $form ) {
 
 		$settings = $action->post_content;
@@ -178,23 +225,23 @@ class WPF_Formidable_Forms extends FrmFormAction {
 
 		$form_fields = FrmField::getAll( 'fi.form_id=' . (int) $form->id . " and fi.type not in ('break', 'divider', 'html', 'captcha', 'form')", 'field_order' );
 
-		// Keep track of field types for wpf_format_field_value
+		// Keep track of field types for wpf_format_field_value.
 		$types = array();
 
-		// Do some pre-processing on the submitted data for checkboxes and toggles
+		// Do some pre-processing on the submitted data for checkboxes and toggles.
 
 		foreach ( $form_fields as $field ) {
 
 			if ( $field->type == 'toggle' && ! isset( $entry->metas[ $field->id ] ) ) {
 
 				if ( empty( $field->field_options['toggle_off'] ) ) {
-					$entry->metas[ $field->id ] = null;
+					$entry->metas[ $field->id ] = 0;
 				} else {
 					$entry->metas[ $field->id ] = $field->field_options['toggle_off'];
 				}
 			} elseif ( $field->type == 'checkbox' && ! isset( $entry->metas[ $field->id ] ) ) {
 
-				$entry->metas[ $field->id ] = null;
+				$entry->metas[ $field->id ] = 0;
 
 			} elseif ( $field->type == 'checkbox' && count( $field->options ) == 1 ) {
 
@@ -222,12 +269,30 @@ class WPF_Formidable_Forms extends FrmFormAction {
 
 		}
 
+		// Combine multi-part fields into a single value.
+
+		foreach ( $entry->metas as $id => $value ) {
+
+			if ( is_array( $value ) ) {
+
+				foreach ( $value as $value_id => $value_value ) {
+
+					$entry->metas[ $id . '_' . $value_id ] = $value_value;
+
+				}
+
+			}
+
+		}
+
 		$update_data   = array();
 		$email_address = false;
 
 		foreach ( $settings['contact_fields'] as $field_id => $value ) {
 
-			if ( empty( $value['crm_field'] ) || ! isset( $entry->metas[ $field_id ] ) || ( empty( $entry->metas[ $field_id ] ) && ! is_null( $entry->metas[ $field_id ] ) ) ) {
+			// Handling unique address fields.
+			// Skip if no tags are saved or field isn't present.
+			if ( empty( $value['crm_field'] ) || ! isset( $entry->metas[ $field_id ] ) ) {
 				continue;
 			}
 
@@ -237,13 +302,18 @@ class WPF_Formidable_Forms extends FrmFormAction {
 				continue;
 			}
 
+			// For multi-part fields or unknown IDs.
+			if ( ! isset( $types[ $field_id ] ) ) {
+				$types[ $field_id ] = 'text';
+			}
+
 			$update_data[ $value['crm_field'] ] = apply_filters( 'wpf_format_field_value', $entry->metas[ $field_id ], $types[ $field_id ], $value['crm_field'] );
 
 			if ( $email_address == false && ! is_array( $entry->metas[ $field_id ] ) && is_email( $entry->metas[ $field_id ] ) ) {
 				$email_address = $entry->metas[ $field_id ];
 			}
 
-			// Array handling
+			// Array handling.
 			if ( is_array( $update_data[ $value['crm_field'] ] ) ) {
 				$update_data[ $value['crm_field'] ] = implode( ', ', $update_data[ $value['crm_field'] ] );
 			}
@@ -265,7 +335,6 @@ class WPF_Formidable_Forms extends FrmFormAction {
 		);
 
 		$contact_id = WPF_Forms_Helper::process_form_data( $args );
-
 	}
 
 	/**

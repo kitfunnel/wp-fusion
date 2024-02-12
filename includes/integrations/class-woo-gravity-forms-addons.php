@@ -35,7 +35,7 @@ class WPF_Woo_Gravity_Forms_Addons extends WPF_Integrations_Base {
 	 * @since 3.40.57
 	 * @var string $docs_url
 	 */
-	public $docs_url = 'https://wpfusion.com/documentation/ecommerce/woocommerce-gravity-forms-product-addons/';
+	public $docs_url = 'https://wpfusion.com/documentation/ecommerce/woocommerce-gravity-forms-product-add-ons/';
 
 	/**
 	 * Gets things started.

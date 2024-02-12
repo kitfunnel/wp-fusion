@@ -58,6 +58,10 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 		add_action( 'mepr-product-options-tabs', array( $this, 'output_product_nav_tab' ) );
 		add_action( 'mepr-product-options-pages', array( $this, 'output_product_content_tab' ) );
 		add_action( 'save_post', array( $this, 'save_meta_box_data' ) );
+		add_filter( 'mepr-admin-transactions-cols', array( $this, 'admin_columns' ) );
+		add_action( 'mepr-admin-transactions-cell', array( $this, 'admin_columns_content' ), 10, 3 );
+		add_action( 'mepr_edit_transaction_table_after', array( $this, 'transaction_table_after' ) );
+		add_action( 'mepr_table_controls_search', array( $this, 'transactions_debug' ), 5 );
 
 		// Completed purchase / status changes.
 		add_filter( 'wpf_user_register', array( $this, 'user_register' ), 10, 2 );
@@ -70,6 +74,7 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 		add_action( 'mepr-txn-status-complete', array( $this, 'apply_tags_checkout' ) );         // Called after completed payment.
 		add_action( 'mepr-txn-status-refunded', array( $this, 'transaction_refunded' ) );        // Refunds.
 		add_action( 'mepr-txn-status-pending', array( $this, 'transaction_pending' ) );          // Pending.
+		add_action( 'mepr-txn-transition-status', array( $this, 'sync_transaction_status' ), 10, 3 ); // Sync the transaction status.
 
 		// Recurring transcation stuff.
 		add_action( 'mepr-event-recurring-transaction-failed', array( $this, 'recurrring_transaction_failed' ) );
@@ -108,10 +113,75 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 		add_action( 'wpf_batch_memberpress', array( $this, 'batch_step_subscriptions' ) );
 
 		add_action( 'wpf_batch_memberpress_transactions_init', array( $this, 'batch_init_transactions' ) );
-		add_action( 'wpf_batch_memberpress_transactions', array( $this, 'batch_step_transactions' ) );
+		add_action( 'wpf_batch_memberpress_transactions', array( $this, 'sync_transaction_fields' ) );
 
 		add_action( 'wpf_batch_memberpress_memberships_init', array( $this, 'batch_init_memberships' ) );
 		add_action( 'wpf_batch_memberpress_memberships', array( $this, 'batch_step_memberships' ) );
+
+	}
+
+	/**
+	 * Syncs any enabled fields for a transaction.
+	 *
+	 * @since 3.41.46
+	 *
+	 * @param int $transaction_id The transaction ID.
+	 */
+	public function sync_transaction_fields( $transaction_id ) {
+
+		$txn = new MeprTransaction( $transaction_id );
+
+		$user_id = $txn->user_id;
+
+		if ( ! $user_id ) {
+			return;
+		}
+
+		$payment_method = $txn->payment_method();
+		$product_id     = $txn->product_id;
+
+		$update_data = array(
+			'mepr_membership_level'   => html_entity_decode( get_the_title( $product_id ) ),
+			'mepr_reg_date'           => $txn->created_at,
+			'mepr_payment_method'     => $payment_method->name,
+			'mepr_transaction_total'  => $txn->total,
+			'mepr_transaction_status' => $txn->status,
+			'mepr_membership_status'  => $this->get_membership_status( $user_id ),
+		);
+
+		// Add expiration only if applicable
+		if ( strtotime( $txn->expires_at ) >= 0 && 'subscription_confirmation' !== $txn->txn_type ) {
+			$update_data['mepr_expiration'] = $txn->expires_at;
+		}
+
+		// Coupons
+		if ( ! empty( $txn->coupon_id ) ) {
+			$update_data['mepr_coupon'] = get_the_title( $txn->coupon_id );
+		}
+
+		wp_fusion()->user->push_user_meta( $user_id, $update_data );
+
+	}
+
+	/**
+	 * Get the membership status for a user by ID.
+	 *
+	 * @since 3.41.46
+	 *
+	 * @param int $user_id The user ID.
+	 * @return string The status.
+	 */
+	public function get_membership_status( $user_id ) {
+
+		$mepr_user = new MeprUser( $user_id );
+
+		if ( $mepr_user->is_active() ) {
+			return 'Active';
+		} elseif ( $mepr_user->has_expired() ) {
+			return 'Inactive';
+		} else {
+			return 'None';
+		}
 
 	}
 
@@ -147,6 +217,7 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 		}
 
 	}
+
 
 	/**
 	 * Track lesson completion.
@@ -460,7 +531,7 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 				wpf_log( 'info', $user_id, 'User unenrolled from <a href="' . admin_url( 'post.php?post=' . $product_id . '&action=edit' ) . '" target="_blank">' . get_the_title( $product_id ) . '</a> by linked tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
 
 				$transactions = $mepr_user->active_product_subscriptions( 'transactions' );
-				$did_id       = false;
+				$did_it       = false;
 
 				foreach ( $transactions as $transaction ) {
 
@@ -746,10 +817,19 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 		$product_id     = $txn->product_id;
 
 		$update_data = array(
-			'mepr_membership_level' => html_entity_decode( get_the_title( $product_id ) ),
-			'mepr_reg_date'         => $txn->created_at,
-			'mepr_payment_method'   => $payment_method->name,
+			'mepr_membership_level'  => html_entity_decode( get_the_title( $product_id ) ),
+			'mepr_reg_date'          => $txn->created_at,
+			'mepr_payment_method'    => $payment_method->name,
+			'mepr_transaction_total' => $txn->total,
+			'mepr_membership_status' => $this->get_membership_status( $txn->user_id ),
 		);
+
+		// The subscription total can be different from the transaction total in cases of discounts, trials, etc.
+		$subscription = $txn->subscription();
+
+		if ( false !== $subscription ) {
+			$update_data['mepr_sub_total'] = $subscription->total;
+		}
 
 		// Add expiration only if applicable
 		if ( strtotime( $txn->expires_at ) >= 0 && 'subscription_confirmation' !== $txn->txn_type ) {
@@ -821,11 +901,13 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 
 				$settings = get_post_meta( $transaction->product_id, 'wpf-settings-memberpress', true );
 
-				if ( empty( $settings ) || empty( $settings['remove_tags'] ) ) {
+				if ( empty( $settings ) || empty( $settings['remove_tags'] ) || empty( $settings['apply_tags_registration'] ) ) {
 					continue;
 				}
 
-				// If "remove tags" is checked and we're no longer at that level, remove them
+				// If "remove tags" is checked and we're no longer at that level, remove them.
+
+				wpf_log( 'info', $txn->user_id, 'User is no longer at level <strong>' . get_the_title( $transaction->product_id ) . ' and Remove Tags is checked on that level. Removing tags.' );
 
 				$remove_tags = array_merge( $remove_tags, $settings['apply_tags_registration'] );
 
@@ -932,6 +1014,8 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 
 		add_action( 'wpf_tags_modified', array( $this, 'add_to_membership' ), 10, 2 );
 
+		$txn->update_meta( 'wpf_complete', current_time( 'Y-m-d H:i:s' ) );
+
 	}
 
 	/**
@@ -980,6 +1064,21 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 			add_action( 'wpf_tags_modified', array( $this, 'add_to_membership' ), 10, 2 );
 
 		}
+
+	}
+
+	/**
+	 * Sync transaction statuses when they're changed.
+	 *
+	 * @since 3.41.43
+	 *
+	 * @param string          $old_status The old status.
+	 * @param string          $new_status The new status.
+	 * @param MeprTransaction $txn The transaction.
+	 */
+	public function sync_transaction_status( $old_status, $new_status, $txn ) {
+
+		$this->sync_transaction_fields( $txn->id );
 
 	}
 
@@ -1264,6 +1363,10 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 			return;
 		}
 
+		if ( 'pending' === $old_status && 'cancelled' === $new_status ) {
+			return; // failed initial transactions (i.e. a Stripe card decline).
+		}
+
 		// Don't require the checkout callback
 		remove_action( 'mepr-signup', array( $this, 'apply_tags_checkout' ) );
 		remove_action( 'mepr-event-transaction-completed', array( $this, 'apply_tags_checkout' ) );
@@ -1339,15 +1442,19 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 
 			// Update data.
 			$update_data = array(
-				'mepr_reg_date'         => $data['created_at'],
-				'mepr_payment_method'   => $payment_method->name,
-				'mepr_membership_level' => html_entity_decode( get_the_title( $data['product_id'] ) ),
-				'mepr_expiration'       => $subscription->expires_at,
+				'mepr_reg_date'          => $data['created_at'],
+				'mepr_payment_method'    => $payment_method->name,
+				'mepr_membership_level'  => html_entity_decode( get_the_title( $data['product_id'] ) ),
+				'mepr_expiration'        => $subscription->expires_at,
+				'mepr_sub_status'        => $new_status,
+				'mepr_sub_total'         => $subscription->total,
+				'mepr_membership_status' => $this->get_membership_status( $data['user_id'] ),
 			);
 
-			// Sync trial duration
+			// Sync trial duration and expiration.
 			if ( $subscription->trial ) {
 				$update_data['mepr_trial_duration'] = $subscription->trial_days;
+				$update_data['mepr_expiration']     = gmdate( 'c', strtotime( $data['created_at'] ) + MeprUtils::days( $subscription->trial_days ) );
 			}
 
 			// Coupon used
@@ -1394,12 +1501,80 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 			// Paused / suspended subscription
 			$apply_tags = array_merge( $apply_tags, $settings['apply_tags_suspended'] );
 
+		} if ( 'active' === $new_status && 'suspended' === $old_status ) {
+
+			// Reactivated subscription
+			$apply_tags  = array_merge( $apply_tags, $settings['apply_tags_resumed'] );
+
 		} elseif ( $subscription->in_trial() ) {
 
 			// If is in a trial and isn't cancelled / expired
 			$apply_tags = array_merge( $apply_tags, $settings['apply_tags_trial'] );
 
 		}
+
+		// We don't want to remove any tags from plans that the user is still subscribed to (@since 3.41.21).
+
+		$active_subscription_tags    = array();
+		$cancelled_subscription_tags = array();
+		$mepr_user                   = new MeprUser( $data['user_id'] );
+		$active_subscriptions        = $mepr_user->subscriptions();
+
+		foreach ( $active_subscriptions as $active_subscription ) {
+
+			if ( ! is_a( $active_subscription, 'MeprSubscription' ) ) {
+				continue;
+			}
+
+			if ( $active_subscription->id === $subscription->id || 'active' !== $active_subscription->status ) {
+				continue;
+			}
+
+			$settings = get_post_meta( $active_subscription->product_id, 'wpf-settings-memberpress', true );
+
+			if ( empty( $settings ) ) {
+				continue;
+			}
+
+			if ( ! empty( $settings['apply_tags_registration'] ) ) {
+
+				$diff = array_intersect( $remove_tags, $settings['apply_tags_registration'] );
+
+				if ( $diff ) {
+
+					wpf_log(
+						'notice',
+						$data['user_id'],
+						'Memberpress subscription <a href="' . admin_url( 'post.php?post=' . $subscription->product_id . '&action=edit' ) . '" target="_blank">#' . $subscription->product_id . '</a> status changed to <strong>' . $new_status . '</strong>, but user still has another active subscription to membership <a href="' . admin_url( 'post.php?post=' . $active_subscription->product_id . '&action=edit' ) . '" target="_blank">' . get_the_title( $active_subscription->product_id ) . '</a>, so the tag(s) <strong>' . implode( ', ', array_map( 'wpf_get_tag_label', $diff ) ) . '</strong> will not be removed.'
+					);
+
+				}
+
+				$active_subscription_tags = array_merge( $active_subscription_tags, $settings['apply_tags_registration'] );
+
+			}
+
+			// Also don't apply cancelled tags if they are still active on another subscription.
+			if ( ! empty( $settings['apply_tags_cancelled'] ) ) {
+				$cancelled_subscription_tags = array_merge( $cancelled_subscription_tags, $settings['apply_tags_cancelled'] );
+			}
+		}
+
+		if ( 'active' !== $new_status ) {
+
+			// This was synced for the active status above.
+
+			$update_data = array(
+				'mepr_sub_status'        => $new_status,
+				'mepr_membership_status' => $this->get_membership_status( $data['user_id'] ),
+			);
+
+			wp_fusion()->user->push_user_meta( $data['user_id'], $update_data );
+
+		}
+
+		$remove_tags = array_diff( $remove_tags, $active_subscription_tags );
+		$apply_tags  = array_diff( $apply_tags, $cancelled_subscription_tags );
 
 		// Prevent looping when tags are modified
 		remove_action( 'wpf_tags_modified', array( $this, 'add_to_membership' ), 10, 2 );
@@ -1489,6 +1664,30 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 			'pseudo' => true,
 		);
 
+		$meta_fields['mepr_membership_status'] = array(
+			'label'   => 'Membership Status',
+			'tooltip' => __( 'Either <strong>Active</strong>, <strong>Inactive</strong>, or <strong>None</strong>' ),
+			'type'    => 'text',
+			'group'   => 'memberpress',
+			'pseudo'  => true,
+		);
+
+		$meta_fields['mepr_sub_status'] = array(
+			'label'   => 'Subscription Status',
+			'tooltip' => __( 'Either <strong>pending</strong>, <strong>active</strong>, <strong>suspended</strong> or <strong>cancelled</strong>' ),
+			'type'    => 'text',
+			'group'   => 'memberpress',
+			'pseudo'  => true,
+		);
+
+		$meta_fields['mepr_transaction_status'] = array(
+			'label'   => 'Transaction Status',
+			'tooltip' => __( 'Either <strong>pending</strong>, <strong>complete</strong>, <strong>failed</strong> or <strong>refunded</strong>' ),
+			'type'    => 'text',
+			'group'   => 'memberpress',
+			'pseudo'  => true,
+		);
+
 		$meta_fields['mepr_expiration'] = array(
 			'label'  => 'Expiration Date',
 			'type'   => 'date',
@@ -1505,6 +1704,20 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 
 		$meta_fields['mepr_payment_method'] = array(
 			'label'  => 'Payment Method',
+			'type'   => 'text',
+			'group'  => 'memberpress',
+			'pseudo' => true,
+		);
+
+		$meta_fields['mepr_sub_total'] = array(
+			'label'  => 'Subscription Total',
+			'type'   => 'text',
+			'group'  => 'memberpress',
+			'pseudo' => true,
+		);
+
+		$meta_fields['mepr_transaction_total'] = array(
+			'label'  => 'Transaction Total',
 			'type'   => 'text',
 			'group'  => 'memberpress',
 			'pseudo' => true,
@@ -1573,6 +1786,7 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 			'tag_link'                      => array(),
 			'apply_tags_cancelled'          => array(),
 			'apply_tags_suspended'          => array(),
+			'apply_tags_resumed'            => array(),
 			'apply_tags_upgraded'           => array(),
 			'apply_tags_downgraded'         => array(),
 			'apply_tags_refunded'           => array(),
@@ -1649,6 +1863,20 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 		wpf_render_tag_multiselect( $args );
 
 		echo '<br /><span class="description"><small>' . __( 'Apply these tags when a subscription is paused.', 'wp-fusion' ) . '</small></span><br />';
+
+		// Resumed
+
+		echo '<br /<br /><label><strong>' . __( 'Apply Tags - Subscription Resumed', 'wp-fusion' ) . ':</strong></label><br />';
+
+		$args = array(
+			'setting'   => $settings['apply_tags_resumed'],
+			'meta_name' => 'wpf-settings-memberpress',
+			'field_id'  => 'apply_tags_resumed',
+		);
+
+		wpf_render_tag_multiselect( $args );
+
+		echo '<br /><span class="description"><small>' . __( 'Apply these tags when a paused subscription is resumed. The Subscription Paused tags will be removed automatically.', 'wp-fusion' ) . '</small></span><br />';
 
 		// Upgraded
 
@@ -1894,6 +2122,304 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 	}
 
 	/**
+	 * Adds status column to transactions list.
+	 *
+	 * @since 3.41.23
+	 *
+	 * @param array $columns The columns.
+	 * @return array The columns.
+	 */
+	public function admin_columns( $columns ) {
+
+		$new_column = '<span class="wpf-tip wpf-tip-bottom wpf-woo-column-title" data-tip="' . esc_attr__( 'WP Fusion Status', 'wp-fusion' ) . '"><span>' . __( 'WP Fusion Status', 'wp-fusion' ) . '</span>' . wpf_logo_svg( 14 ) . '</span>';
+
+		return wp_fusion()->settings->insert_setting_after( 'col_status', $columns, array( 'wp_fusion' => $new_column ) );
+
+	}
+
+	/**
+	 * Adds content to the status column.
+	 *
+	 * @since 3.41.23
+	 *
+	 * @param string $column_name The column name.
+	 * @param object $rec         The record.
+	 * @param string $attributes  The attributes.
+	 */
+	public function admin_columns_content( $column_name, $rec, $attributes ) {
+
+		if ( 'wp_fusion' === $column_name ) {
+
+			echo '<td ' . $attributes . '>';
+
+			$txn = new MeprTransaction( $rec->id );
+
+			$complete = $txn->get_meta( 'wpf_complete', true );
+
+			if ( $complete || $txn->get_meta( 'wpf_ec_complete', true ) ) {
+
+				$class = 'success';
+
+				// Get the contact edit URL.
+
+				$contact_id = wpf_get_contact_id( $txn->user_id );
+
+				if ( $contact_id ) {
+
+					$url = wp_fusion()->crm->get_contact_edit_url( $contact_id );
+
+					if ( $url ) {
+						$id_text = '<a href="' . esc_url_raw( $url ) . '" target="_blank">#' . esc_html( $contact_id ) . '</a>';
+					} else {
+						$id_text = '#' . esc_html( $contact_id );
+					}
+				} else {
+					$class   = 'partial-success';
+					$id_text = '<em>' . __( 'unknown', 'wp-fusion' ) . '</em>';
+				}
+
+				if ( $complete ) {
+					$show_date = date_i18n( get_option( 'date_format' ) . ' \a\t ' . get_option( 'time_format' ), strtotime( $complete ) );
+				} else {
+					$show_date = '<em>' . __( 'unknown', 'wp-fusion' ) . '</em>';
+				}
+				$tooltip   = sprintf(
+					__( 'This transaction was synced to %1$s contact ID %2$s on %3$s.', 'wp-fusion' ),
+					esc_html( wp_fusion()->crm->name ),
+					$id_text,
+					esc_html( $show_date )
+				);
+
+				if ( function_exists( 'wp_fusion_ecommerce' ) ) {
+
+					// Enhanced ecommerce.
+
+					if ( $txn->get_meta( 'wpf_ec_complete', true ) ) {
+
+						$invoice_id = $txn->get_meta( 'wpf_ec_' . wp_fusion()->crm->slug . '_invoice_id', true );
+
+						if ( $invoice_id ) {
+							$tooltip .= '<br /><br />' . sprintf( __( 'It was processed by Enhanced Ecommerce with invoice ID #%s.', 'wp-fusion' ), $invoice_id );
+						} else {
+							$tooltip .= '<br /><br />' . __( 'It was processed by Enhanced Ecommerce.', 'wp-fusion' );
+						}
+					} else {
+
+						$class    = 'partial-success';
+						$tooltip .= '<br /><br />' . __( 'It was not processed by Enhanced Ecommerce.', 'wp-fusion' );
+
+					}
+				}
+			} else {
+				$class   = 'fail';
+				$tooltip = sprintf( __( 'This transaction was not synced to %s.', 'wp-fusion' ), wp_fusion()->crm->name );
+			}
+
+			echo '<i class="icon-wp-fusion wpf-tip wpf-tip-bottom ' . esc_attr( $class ) . '" data-tip="' . esc_attr( $tooltip ) . '"></i>';
+
+			echo '</td>';
+
+		}
+
+	}
+
+	/**
+	 * Adds WP Fusion info to a single transaction edit page.
+	 *
+	 * @since 3.41.23
+	 *
+	 * @param Mepr_Transaction $txn The transaction
+	 * @return mixed HTML output.
+	 */
+	public function transaction_table_after( $txn ) {
+
+		if ( isset( $_GET['order_action'] ) && 'wpf_process' === $_GET['order_action'] ) {
+
+			$this->apply_tags_checkout( $txn );
+
+			if ( function_exists( 'wp_fusion_ecommerce' ) ) {
+				wp_fusion_ecommerce()->integrations->memberpress->transaction_created( $txn );
+			}
+
+			// Redirect so the query var is removed.
+			wp_safe_redirect( admin_url( 'admin.php?page=memberpress-trans&action=edit&id=' . $txn->id ) );
+			exit;
+
+		}
+
+		?>
+
+		<tr id="wp-fusion-user-profile-settings"><th><?php echo wpf_logo_svg(); ?><h2 style="margin: 0;display: inline-block;vertical-align: super;margin-left: 10px;"><?php esc_html_e( 'WP Fusion', 'wp-fusion' ) ?></h2></th></tr>
+
+		<tr class="wp-fusion-status-row">
+			<th scope="row"><label><?php printf( __( 'Synced to %s:', 'wp-fusion' ), wp_fusion()->crm->name ); ?></label></th>
+			<td>
+				<?php if ( $txn->get_meta( 'wpf_complete', true ) ) : ?>
+					<span><?php echo date_i18n( get_option( 'date_format' ) . ' \a\t ' . get_option( 'time_format' ), strtotime( $txn->get_meta( 'wpf_complete', true ) ) ); ?></span>
+					<span class="dashicons dashicons-yes-alt"></span>
+				<?php elseif ( $txn->get_meta( 'wpf_ec_complete', true ) ) : ?>
+					<?php // from before we stored wpf_complete on the transaction (3.41.23). ?>
+					<span><?php _e( 'Yes', 'wp-fusion' ); ?></span>
+					<span class="dashicons dashicons-yes-alt"></span>
+				<?php else : ?>
+					<span><?php _e( 'No', 'wp-fusion' ); ?></span>
+					<span class="dashicons dashicons-no"></span>
+				<?php endif; ?>
+
+				<?php if ( 'complete' !== $txn->status ) : ?>
+
+					- <?php esc_html_e( 'Transaction is not Complete', 'wp-fusion' ); ?>
+
+				<?php endif; ?>
+
+			</td>
+		</tr>
+
+		<?php $contact_id = wpf_get_contact_id( $txn->user_id ); ?>
+
+		<?php if ( $contact_id ) : ?>
+
+			<tr class="wp-fusion-status-row">
+				<th scope="row"><label><?php _e( 'Contact ID:', 'wp-fusion' ); ?></label></th>
+				<td>
+					<?php echo esc_html( $contact_id ); ?>
+					<?php $url = wp_fusion()->crm->get_contact_edit_url( $contact_id ); ?>
+					<?php if ( false !== $url ) : ?>
+						- <a href="<?php echo esc_url( $url ); ?>" target="_blank"><?php printf( esc_html__( 'View in %s', 'wp-fusion' ), esc_html( wp_fusion()->crm->name ) ); ?> &rarr;</a>
+					<?php endif; ?>
+				</td>
+			</tr>
+
+		<?php endif; ?>
+
+		<?php /* if ( wpf_get_option( 'email_optin' ) ) : ?>
+
+			<tr class="wp-fusion-status-row">
+				<th scope="row"><label><?php _e( 'Opted In:', 'wp-fusion' ); ?></label></th>
+
+				<td>
+					<?php if ( $txn->get_meta( 'email_optin', true ) ) : ?>
+						<span><?php _e( 'Yes', 'wp-fusion' ); ?></span>
+						<span class="dashicons dashicons-yes-alt"></span>
+					<?php else : ?>
+						<span><?php _e( 'No', 'wp-fusion' ); ?></span>
+						<span class="dashicons dashicons-no"></span>
+					<?php endif; ?>
+				</td>
+			</tr>
+
+		<?php endif; */ ?>
+
+		<?php if ( class_exists( 'WP_Fusion_Ecommerce' ) ) : ?>
+
+			<tr class="wp-fusion-status-row">
+				<th scope="row"><label><?php printf( __( 'Enhanced Ecommerce:', 'wp-fusion' ), wp_fusion()->crm->name ); ?></label></th>
+				<td>
+					<?php if ( $txn->get_meta( 'wpf_ec_complete', true ) ) : ?>
+						<span><?php _e( 'Yes', 'wp-fusion' ); ?></span>
+						<span class="dashicons dashicons-yes-alt"></span>
+					<?php else : ?>
+						<span><?php _e( 'No', 'wp-fusion' ); ?></span>
+						<span class="dashicons dashicons-no"></span>
+					<?php endif; ?>
+				</td>
+			</tr>
+
+			<?php $invoice_id = $txn->get_meta( 'wpf_ec_' . wp_fusion()->crm->slug . '_invoice_id', true ); ?>
+
+			<?php if ( $invoice_id ) : ?>
+
+				<tr class="wp-fusion-status-row">
+					<th scope="row"><label><?php _e( 'Invoice ID:', 'wp-fusion' ); ?></label></th>
+					<td>
+						<span><?php echo esc_html( $invoice_id ); ?></span>
+					</td>
+			</tr>
+
+			<?php endif; ?>
+
+		<?php endif; ?>
+
+		<?php if ( 'complete' === $txn->status ) : ?>
+
+			<tr class="wp-fusion-status-row">
+
+				<th scope="row"><label><?php _e( 'Actions:', 'wp-fusion' ); ?></label></th>
+				<td>
+					<a
+					href="<?php echo esc_url( add_query_arg( array( 'order_action' => 'wpf_process' ) ) ); ?>"
+					class="wpf-action-button button-secondary wpf-tip wpf-tip-bottom"
+					data-tip="<?php printf( esc_html__( 'The transaction will be processed again as if the customer had just checked out. Any enabled fields will be synced to %s, and any configured tags will be applied.', 'wp-fusion' ), wp_fusion()->crm->name ); ?>">
+						<?php _e( 'Process WP Fusion actions again ', 'wp-fusion' ); ?>
+					</a>
+					<br />
+					<br />
+				</td>
+
+			</tr>
+
+		<?php endif; ?>
+
+		<?php
+
+	}
+
+	/**
+	 * Adds WP Fusion info to a single transaction edit page.
+	 *
+	 * @since 3.41.23
+	 *
+	 * @param Mepr_Transaction $txn The transaction
+	 * @return mixed HTML output.
+	 */
+	public function transactions_debug() {
+
+		if ( isset( $_REQUEST['page'] ) && 'memberpress-trans' === $_REQUEST['page'] && isset( $_REQUEST['wpf_debug'] ) ) {
+
+			$transactions_db = MeprTransaction::get_all();
+
+			$transactions_by_status = array();
+
+			foreach ( $transactions_db as $txn ) {
+
+				$txn = new MeprTransaction( $txn->id );
+
+				if ( ! isset( $transactions_by_status[ $txn->status ] ) ) {
+					$transactions_by_status[ $txn->status ] = array();
+				}
+
+				$transactions_by_status[ $txn->status ][ $txn->id ] = array(
+					'user_id'         => $txn->user_id,
+					'wpf_complete'    => $txn->get_meta( 'wpf_complete', true ),
+					'wpf_ec_complete' => $txn->get_meta( 'wpf_ec_complete', true ),
+					'wpf_invoice_id'  => $txn->get_meta( 'wpf_ec_' . wp_fusion()->crm->slug . '_invoice_id', true ),
+				);
+
+			}
+
+			echo '<ul>';
+
+			foreach ( $transactions_by_status as $status => $transactions ) {
+
+				echo '<li><strong>Status ' . $status . '</strong> - ' . count( $transactions ) . '</li>';
+				//echo '</li><strong>' . $status . ' + wpf_complete</strong> - ' . count( array_filter( wp_list_pluck( $transactions, 'wpf_complete' ) ) ) . '</li>';
+				echo '<li><strong>' . $status . ' + wpf_ec_complete</strong> - ' . count( array_filter( wp_list_pluck( $transactions, 'wpf_ec_complete' ) ) ) . '</li>';
+				echo '<li><strong>' . $status . ' + ' . wp_fusion()->crm->name . ' invoice</strong> - ' . count( array_filter( wp_list_pluck( $transactions, 'wpf_invoice_id' ) ) ) . '</li>';
+				echo '<li>';
+
+					echo '<pre>';
+					print_r( $transactions );
+					echo '</pre>';
+
+				echo '</li>';
+
+			}
+
+		}
+
+	}
+
+	/**
 	 * //
 	 * // BATCH TOOLS
 	 * //
@@ -1971,6 +2497,8 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 			'mepr_reg_date'         => $subscription->created_at,
 			'mepr_expiration'       => $subscription->expires_at,
 			'mepr_membership_level' => html_entity_decode( get_the_title( $subscription->product_id ) ),
+			'mepr_sub_total'        => $subscription->total,
+			'mepr_sub_status'       => $subscription->status,
 		);
 
 		if ( ! empty( $subscription->user_id ) ) {
@@ -2001,44 +2529,6 @@ class WPF_MemberPress extends WPF_Integrations_Base {
 		}
 
 		return $transactions;
-
-	}
-
-	/**
-	 * Processes member actions in batches
-	 *
-	 * @access public
-	 * @return void
-	 */
-
-	public function batch_step_transactions( $transaction_id ) {
-
-		$txn = new MeprTransaction( $transaction_id );
-
-		$user_id = $txn->user_id;
-
-		$payment_method = $txn->payment_method();
-		$product_id     = $txn->product_id;
-
-		$update_data = array(
-			'mepr_membership_level' => html_entity_decode( get_the_title( $product_id ) ),
-			'mepr_reg_date'         => $txn->created_at,
-			'mepr_payment_method'   => $payment_method->name,
-		);
-
-		// Add expiration only if applicable
-		if ( strtotime( $txn->expires_at ) >= 0 && 'subscription_confirmation' !== $txn->txn_type ) {
-			$update_data['mepr_expiration'] = $txn->expires_at;
-		}
-
-		// Coupons
-		if ( ! empty( $txn->coupon_id ) ) {
-			$update_data['mepr_coupon'] = get_the_title( $txn->coupon_id );
-		}
-
-		if ( ! empty( $user_id ) ) {
-			wp_fusion()->user->push_user_meta( $user_id, $update_data );
-		}
 
 	}
 

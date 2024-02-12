@@ -38,7 +38,7 @@ if ( ( class_exists( 'LearnDash_Settings_Metabox' ) ) && ( ! class_exists( 'WPF_
 		 */
 		public function load_settings_fields() {
 
-			$this->setting_option_fields = apply_filters( 'learndash_settings_fields_wpf', $this->setting_option_fields, $this->settings_metabox_key );
+			$this->setting_option_fields = apply_filters( 'learndash_course_settings_fields_wpf', $this->setting_option_fields, $this->settings_metabox_key );
 
 			parent::load_settings_fields();
 		}

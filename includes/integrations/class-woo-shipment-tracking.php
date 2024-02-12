@@ -63,11 +63,14 @@ class WPF_Woo_Shipment_Tracking extends WPF_Integrations_Base {
 			return;
 		}
 
-		if ( ! class_exists( 'WC_Shipment_Tracking_Actions' ) ) {
+		if ( class_exists( 'AST_Pro_Actions' ) ) {
+			$st = AST_Pro_Actions::get_instance();
+		} elseif ( class_exists( 'WC_Shipment_Tracking_Actions' ) ) {
+			$st = WC_Shipment_Tracking_Actions::get_instance();
+		} else {
 			return;
 		}
 
-		$st   = WC_Shipment_Tracking_Actions::get_instance();
 		$item = $st->get_formatted_tracking_item( $post_id, end( $meta_value ) );
 
 		if ( ! empty( $item['formatted_tracking_link'] ) ) {

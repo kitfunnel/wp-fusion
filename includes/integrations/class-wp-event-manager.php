@@ -49,7 +49,7 @@ class WPF_WP_Event_Manager extends WPF_Integrations_Base {
 		add_filter( 'wpf_meta_field_groups', array( $this, 'add_meta_field_group' ) );
 		add_filter( 'wpf_meta_fields', array( $this, 'set_contact_field_names' ) );
 
-		add_action( 'add_meta_boxes', array( $this, 'add_meta_box' ), 10, 2 );
+		add_action( 'add_meta_boxes', array( $this, 'add_meta_box' ) );
 		add_action( 'save_post_event_listing', array( $this, 'save_meta_box_data' ) );
 
 	}
@@ -83,10 +83,17 @@ class WPF_WP_Event_Manager extends WPF_Integrations_Base {
 			$registration_data
 		);
 
-		foreach ( $registration_data as $value ) {
+		foreach ( $registration_data as $key => $value ) {
 			if ( is_string( $value ) && is_email( $value ) ) {
 				$registration_data['user_email'] = $value;
 			}
+
+			if ( 0 === strpos( $key, '_' ) ) {
+				// v1.6.18 started prefixing the meta keys with underscores.
+				$key = ltrim( $key, '_' );
+				$registration_data[ $key ] = $value;
+			}
+
 		}
 
 		// If we're adding the registration in the admin, wait until the meta has been saved
@@ -136,7 +143,7 @@ class WPF_WP_Event_Manager extends WPF_Integrations_Base {
 
 		$user = wpf_get_current_user();
 
-		if ( ! empty( $registration_data['_attendee_user_id'] ) && $user->user_email == $registration_data['user_email'] && $update_existing ) {
+		if ( $user && ! empty( $registration_data['_attendee_user_id'] ) && $user->user_email == $registration_data['user_email'] && $update_existing ) {
 
 			wp_fusion()->user->push_user_meta( $registration_data['_attendee_user_id'], $registration_data );
 
@@ -298,13 +305,9 @@ class WPF_WP_Event_Manager extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Adds meta box
-	 *
-	 * @access public
-	 * @return mixed
+	 * Adds meta box.
 	 */
-
-	public function add_meta_box( $post_id, $data ) {
+	public function add_meta_box() {
 
 		add_meta_box( 'wpf-event-meta', 'WP Fusion - Event Settings', array( $this, 'meta_box_callback' ), 'event_listing' );
 

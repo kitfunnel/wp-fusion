@@ -4,11 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Exit if accessed directly
 }
 
-use FluentForm\App\Services\Integrations\IntegrationManager;
-use FluentForm\Framework\Foundation\Application;
-use FluentForm\Framework\Helpers\ArrayHelper;
-
-class WPF_FluentForms extends IntegrationManager {
+class WPF_FluentForms extends \FluentForm\App\Http\Controllers\IntegrationManagerController {
 
 	/**
 	 * The slug for WP Fusion's module tracking.
@@ -35,9 +31,19 @@ class WPF_FluentForms extends IntegrationManager {
 	 */
 	public $docs_url = 'https://wpfusion.com/documentation/lead-generation/fluent-forms/';
 
+	/**
+	 * The integration logo.
+	 *
+	 * @since 3.41.17
+	 * @var string $logo
+	 */
+	public $logo = WPF_DIR_URL . 'assets/img/logo-wide-color.png';
 
-
+	/**
+	 * Get things started.
+	 */
 	public function __construct() {
+
 		parent::__construct(
 			false,
 			'WP Fusion',
@@ -47,26 +53,20 @@ class WPF_FluentForms extends IntegrationManager {
 			16
 		);
 
-		$this->logo = WPF_DIR_URL . 'assets/img/logo-wide-color.png';
-
 		$this->description = sprintf( __( 'WP Fusion syncs your Fluent Forms entries to %s.', 'wp-fusion' ), wp_fusion()->crm->name );
 
 		$this->registerAdminHooks();
 
-		$this->slug                                 = 'fluent-forms';
-		wp_fusion()->integrations->{'fluent-forms'} = $this;
+		wp_fusion()->integrations->{'fluent-forms'} = $this; // add it to our module tracking.
 
-		// If we're using Form Auto Login the form actions can't be processed asynchronously.
-		if ( wpf_get_option( 'auto_login_forms' ) ) {
-			add_filter( 'fluentform_notifying_async_wpfusion', '__return_false' );
-		}
+		add_filter( 'fluentform_notifying_async_wpfusion', array( $this, 'maybe_async' ) );
 
 		add_filter( 'wpf_meta_field_groups', array( $this, 'add_meta_field_group' ) );
 		add_filter( 'wpf_meta_fields', array( $this, 'add_meta_fields' ) );
 
 		add_filter( 'fluentform_user_registration_feed', array( $this, 'merge_registration_data' ), 10, 3 );
 
-		add_action( 'fluentform_user_registration_completed', array( $this, 'save_user_fields' ), 20, 3 );
+		add_action( 'fluentform/user_registration_completed', array( $this, 'save_user_fields' ), 20, 3 );
 		add_action( 'fluentform_user_update_completed', array( $this, 'save_user_fields' ), 20, 3 );
 
 		add_filter( 'wpf_export_options', array( $this, 'export_options' ) );
@@ -95,6 +95,17 @@ class WPF_FluentForms extends IntegrationManager {
 	 */
 
 	public function isConfigured() {
+		return true;
+	}
+
+	/**
+	 * Set integration to enabled.
+	 *
+	 * @since 3.41.18
+	 * @return bool Enabled.
+	 */
+
+	public function isEnabled() {
 		return true;
 	}
 
@@ -320,7 +331,24 @@ class WPF_FluentForms extends IntegrationManager {
 
 	}
 
+	/**
+	 * If we're using form-auto login or tracking leadsources, the form can't be
+	 * processed asynchronously.
+	 *
+	 * @since 3.42.0
+	 *
+	 * @param bool $async_enabled Whether or not async is enabled.
+	 * @return bool Whether or not async is enabled.
+	 */
+	public function maybe_async( $async_enabled ) {
 
+		if ( wpf_get_option( 'auto_login_forms' ) || wp_fusion()->lead_source_tracking->is_tracking_leadsource() ) {
+			return false;
+		}
+
+		return $async_enabled;
+
+	}
 
 	/**
 	 * Adds FE field group to meta fields list
@@ -482,18 +510,20 @@ class WPF_FluentForms extends IntegrationManager {
 	 * @return void
 	 */
 	public function save_user_fields( $user_id, $feed, $entry ) {
-		$field_ids       = array();
+
 		$prefixed_fields = array();
 		$xprofile_fields = \FluentForm\Framework\Helpers\ArrayHelper::get( $feed, 'processedValues.bboss_profile_fields' );
 
-		foreach ( $xprofile_fields as $field ) {
-			$field_ids = $field['label'];
+		if ( ! empty( $xprofile_fields ) ) {
 
-			$prefixed_fields[ 'bbp_field_' . trim( $field_ids ) ] = $field['item_value'];
+			foreach ( $xprofile_fields as $field ) {
+				$prefixed_fields[ 'bbp_field_' . trim( $field['label'] ) ] = $field['item_value'];
+
+			}
+
+			wp_fusion()->user->push_user_meta( $user_id, $prefixed_fields );
 
 		}
-
-		wp_fusion()->user->push_user_meta( $user_id, $prefixed_fields );
 
 	}
 

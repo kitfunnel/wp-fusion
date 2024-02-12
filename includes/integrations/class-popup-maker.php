@@ -143,30 +143,7 @@ class WPF_Popup_Maker extends WPF_Integrations_Base {
 
 	public function registered_conditions( $conditions ) {
 
-		$available_tags = wpf_get_option( 'available_tags', array() );
-
-		if ( is_array( reset( $available_tags ) ) ) {
-
-			// Handling for select with category groupings
-			$data = array();
-
-			$tag_categories = array();
-			foreach ( $available_tags as $value ) {
-				if ( ! isset( $data[ $value['category'] ] ) ) {
-					$data[ $value['category'] ] = array();
-				}
-			}
-
-			foreach ( $available_tags as $id => $value ) {
-
-				$data[ $value['category'] ][ $id ] = $value['label'];
-
-			}
-		} else {
-
-			$data = $available_tags;
-
-		}
+		$available_tags = wp_fusion()->settings->get_available_tags_flat();
 
 		$wpf_conditions = array(
 			'wpf_tags' => array(
@@ -181,7 +158,7 @@ class WPF_Popup_Maker extends WPF_Integrations_Base {
 						'select2'     => true,
 						'as_array'    => true,
 						'class'       => 'select4-wpf-tags-wrapper',
-						'options'     => $data,
+						'options'     => $available_tags,
 					),
 				),
 			),

@@ -754,12 +754,16 @@ class WPF_WishListMember extends WPF_Integrations_Base {
 					<?php foreach ( $levels as $level_id => $level ) : ?>
 
 						<?php
-						if ( ! isset( $settings[ $level_id ] ) ) {
-							$settings[ $level_id ] = array(
-								'apply_tags' => array(),
-								'tag_link'   => array(),
-							);
-						}
+
+						$settings[ $level_id ] = wp_parse_args(
+							$settings[ $level_id ],
+							array(
+								'apply_tags'            => array(),
+								'tag_link'              => array(),
+								'apply_tags_cancelled'  => array(),
+							)
+						);
+
 						?>
 
 						<tr>

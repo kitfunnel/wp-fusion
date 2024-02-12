@@ -268,8 +268,15 @@ class WPF_UM extends WPF_Integrations_Base {
 		foreach ( UM()->form()->all_fields as $id => $field ) {
 
 			if ( 'checkbox' === $field['type'] && ! isset( $post_data[ $id ] ) ) {
+
 				$post_data[ $id ] = null;
+
+			} elseif ( 'radio' === $field['type'] && isset( $post_data[ $id ] ) && is_array( $post_data[ $id ] ) && 1 === count( $post_data[ $id ] ) ) {
+
+				$post_data[ $id ] = $post_data[ $id ][0];
+
 			}
+
 		}
 
 		return $post_data;

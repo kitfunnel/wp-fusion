@@ -22,8 +22,15 @@ class WPF_Access_Control {
 	 * @since 3.37.30
 	 * @var  can_filter_content
 	 */
-
 	public $can_filter_content = false;
+
+	/**
+	 * Keep the taxonomy rules here to avoid hitting the DB multiple times.
+	 *
+	 * @since 3.41.46
+	 * @var  bool|array
+	 */
+	public $taxonomy_rules = false;
 
 
 	/**
@@ -46,8 +53,12 @@ class WPF_Access_Control {
 
 		add_filter( 'wp_get_nav_menu_items', array( $this, 'hide_menu_items' ), 10, 3 );
 
+		// This is expensive so we'll only filter terms if rules are set.
+		if ( $this->get_taxonomy_rules() ) {
+			add_filter( 'get_terms_args', array( $this, 'get_terms_args' ), 10, 2 );
+		}
+
 		// Query / archive filtering
-		add_action( 'get_terms_args', array( $this, 'get_terms_args' ), 10, 2 );
 		add_action( 'pre_get_posts', array( $this, 'filter_queries' ) );
 		add_filter( 'posts_where', array( $this, 'posts_where_restricted_terms' ), 10, 2 );
 		add_filter( 'the_posts', array( $this, 'exclude_restricted_posts' ), 10, 2 );
@@ -63,12 +74,18 @@ class WPF_Access_Control {
 		// Protect post types
 		add_filter( 'wpf_post_access_meta', array( $this, 'check_post_type' ), 10, 2 );
 
+		// Protect REST API responses.
+		add_filter( 'rest_prepare_post', array( $this, 'protect_rest_content_response' ), 10, 2 );
+
 		// Page / post / widget access control
 		add_action( 'template_redirect', array( $this, 'template_redirect' ), 15 );
 		add_filter( 'widget_display_callback', array( $this, 'hide_restricted_widgets' ), 10, 3 );
 
 		// Site lockout
 		add_action( 'template_redirect', array( $this, 'maybe_do_lockout' ), 13 );
+
+		// Tags as body classes.
+		add_filter( 'body_class', array( $this, 'body_class' ) );
 
 		// Return after login
 
@@ -84,7 +101,6 @@ class WPF_Access_Control {
 		// Check to see if a page is protected but no redirect is specified, and there's no content area
 		add_filter( 'the_content', array( $this, 'test_the_content' ) );
 		add_action( 'wp_footer', array( $this, 'maybe_doing_it_wrong' ) );
-
 	}
 
 
@@ -121,15 +137,22 @@ class WPF_Access_Control {
 	 */
 	public function get_taxonomy_rules() {
 
-		$alloptions = wp_load_alloptions();
+		if ( false === $this->taxonomy_rules ) {
 
-		if ( isset( $alloptions['wpf_taxonomy_rules'] ) ) {
-			$rules = maybe_unserialize( $alloptions['wpf_taxonomy_rules'] );
-		} else {
-			$rules = array();
+			$rules = (array) get_option( 'wpf_taxonomy_rules', array() );
+
+			foreach ( $rules as $i => $rule ) {
+
+				if ( empty( array_filter( $rule ) ) ) {
+					unset( $rules[ $i ] );
+				}
+			}
+
+			$this->taxonomy_rules = apply_filters( 'wpf_taxonomy_rules', $rules );
+
 		}
 
-		return apply_filters( 'wpf_taxonomy_rules', $rules );
+		return $this->taxonomy_rules;
 
 	}
 
@@ -148,13 +171,13 @@ class WPF_Access_Control {
 			return true;
 		}
 
-		if ( empty( $user_id ) ) {
-			$user_id = wpf_get_current_user_id();
+		// If admins are excluded from restrictions.
+		if ( wpf_admin_override() && ! $user_id ) {
+			return true;
 		}
 
-		// If admins are excluded from restrictions.
-		if ( wpf_get_option( 'exclude_admins' ) && user_can( $user_id, 'manage_options' ) ) {
-			return true;
+		if ( ! $user_id ) {
+			$user_id = wpf_get_current_user_id();
 		}
 
 		// Allow inheriting protections from another post.
@@ -893,6 +916,30 @@ class WPF_Access_Control {
 	}
 
 	/**
+	 * Applies the current user's tags as CSS classes to the <body> element.
+	 *
+	 * @since 3.42.1
+	 *
+	 * @param array $classes The CSS classes.
+	 * @return array The CSS classes.
+	 */
+	public function body_class( $classes ) {
+
+		if ( ! wpf_get_option( 'tags_as_classes' ) || ! wpf_is_user_logged_in() ) {
+			return $classes;
+		}
+
+		foreach ( wpf_get_tags() as $tag_id ) {
+
+			$tag_name  = sanitize_title( wpf_get_tag_label( $tag_id ) );
+			$classes[] = 'tag-' . $tag_name;
+
+		}
+
+		return $classes;
+	}
+
+	/**
 	 * Determines whether a search engine or bot is trying to crawl the page
 	 *
 	 * @access public
@@ -1044,10 +1091,10 @@ class WPF_Access_Control {
 					$item_id = $item->menu_item_parent;
 
 					// Also hide if parent is hidden.
-					$settings = get_post_meta( $item_id, 'wpf-settings', true );
+					$parent_settings = get_post_meta( $item_id, 'wpf-settings', true );
 
-					if ( empty( $settings ) ) {
-						continue;
+					if ( ! empty( $parent_settings ) ) {
+						$settings = $parent_settings;
 					}
 				}
 
@@ -1222,6 +1269,10 @@ class WPF_Access_Control {
 			return false;
 		}
 
+		if ( doing_filter( 'wpf_user_can_access' ) ) {
+			return false; // if we're already inside the access check filter, don't filter queries again.
+		}
+
 		if ( $query->is_main_query() && ! $query->is_archive() && ! $query->is_search() && ! $query->is_home() ) {
 			return false;
 		}
@@ -1292,6 +1343,8 @@ class WPF_Access_Control {
 		if ( wpf_admin_override() ) {
 			return array();
 		}
+
+		$post_types = array_values( $post_types );
 
 		$user_id = wpf_get_current_user_id();
 		$not_in  = wp_cache_get( "wpf_query_filter_{$user_id}_{$post_types[0]}" );
@@ -1415,8 +1468,6 @@ class WPF_Access_Control {
 		if ( empty( $user_id ) ) {
 			$user_id = wpf_get_current_user_id();
 		}
-
-		$user_tags = wpf_get_tags( $user_id );
 
 		$term_ids = array();
 
@@ -1638,6 +1689,24 @@ class WPF_Access_Control {
 
 	}
 
+	/**
+	 * Protects restricted post content when accessed over the REST API.
+	 *
+	 * @since 3.42.2
+	 *
+	 * @param WP_REST_Response $data The REST response object.
+	 * @param WP_Post          $post Post object.
+	 */
+	public function protect_rest_content_response( $data, $post ) {
+
+		if ( ! $this->user_can_access( $post->ID ) ) {
+			$data->data['content']['rendered'] = '<!-- protected by WP Fusion, post ID ' . $post->ID . ' -->';
+		}
+
+		return $data;
+
+	}
+
 
 	/**
 	 * Cache the user_can_access check in memory so we don't have to hit the
@@ -1648,7 +1717,7 @@ class WPF_Access_Control {
 	 * @param bool     $can_access Indicates if user can access.
 	 * @param int      $user_id    The user ID.
 	 * @param int|bool $post_id    The post ID.
-	 * @return bool  Whether or not the user can access.
+	 * @return bool Whether or not the user can access.
 	 */
 	public function cache_can_access( $can_access, $user_id, $post_id = false ) {
 

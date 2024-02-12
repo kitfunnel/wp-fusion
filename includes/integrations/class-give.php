@@ -76,6 +76,10 @@ class WPF_Give extends WPF_Integrations_Base {
 
 		// Optin field
 		add_action( 'give_donation_form_after_email', array( $this, 'add_optin_field' ), 10, 1 );
+
+		// Offline Donations
+		add_filter( 'give_forms_offline_donations_metabox_fields', array( $this, 'add_offline_settings' ) );
+
 	}
 
 	/**
@@ -108,7 +112,7 @@ class WPF_Give extends WPF_Integrations_Base {
 
 		$settings = give_get_meta( $payment_data['give_form_id'], 'wpf_settings_give', true );
 
-		if ( empty( $settings ) || 'enabled' != $settings['enabled'] ) {
+		if ( ! empty( $settings ) && 'disabled' === $settings['enabled'] ) {
 			return;
 		}
 
@@ -204,7 +208,27 @@ class WPF_Give extends WPF_Integrations_Base {
 
 	public function create_update_donor( $donor_id ) {
 
-		$donor = new Give_Donor( $donor_id );
+		$donor         = new Give_Donor( $donor_id );
+		$last_donation = $donor->get_last_donation();
+		$payment       = new Give_Payment( $last_donation );
+
+		if ( 'give_subscription' === $payment->status && doing_action( 'give_update_payment_status' ) ) {
+
+			// Wait until the donor's donation count and totals have updated.
+			add_action(
+				'give_recurring_record_payment',
+				function( $payment ) {
+					$this->insert_payment( $payment->ID );
+				}
+			);
+
+			return;
+
+		}
+
+		if ( empty( $donor->email ) ) {
+			return new WP_Error( 'error', 'No email address provided for donor.' );
+		}
 
 		$update_data = array(
 			'user_email'      => $donor->email,
@@ -212,12 +236,8 @@ class WPF_Give extends WPF_Integrations_Base {
 			'last_name'       => $donor->get_last_name(),
 			'company'         => $donor->get_company_name(),
 			'donations_count' => $donor->purchase_count,
-			'total_donated'   => round( $donor->purchase_value, 2 ),
+			'total_donated'   => round( floatval( $donor->purchase_value ), 2 ),
 		);
-
-		$last_donation = $donor->get_last_donation();
-
-		$payment = new Give_Payment( $last_donation );
 
 		// Add address
 		$update_data = array_merge( $update_data, $payment->address );
@@ -386,6 +406,11 @@ class WPF_Give extends WPF_Integrations_Base {
 			$apply_tags = array_merge( $apply_tags, $settings['apply_tags_level'][ $payment->price_id ] );
 		}
 
+		$payment_gateway = give_get_meta( $payment_id, '_give_payment_gateway', true );
+		if ( $payment_gateway === 'offline' && ! empty( $settings['apply_tags_offline'] ) ) {
+			$apply_tags = array_merge( $apply_tags, $settings['apply_tags_offline'] );
+		}
+
 		// Maybe get recurring tags
 
 		if ( class_exists( 'Give_Recurring' ) ) {
@@ -543,8 +568,6 @@ class WPF_Give extends WPF_Integrations_Base {
 	 * @param int $payment_id  The payment identifier.
 	 */
 	public function order_details_sidebar( $payment_id ) {
-
-		$payment = new Give_Payment( $payment_id );
 
 		?>
 
@@ -959,6 +982,27 @@ class WPF_Give extends WPF_Integrations_Base {
 
 	}
 
+
+	/**
+	 * Add offline wpf settings for offline donations.
+	 *
+	 * @param array $settings
+	 * @return array
+	 */
+	public function add_offline_settings( $settings ) {
+		$settings[] =
+			array(
+				'name'     => __( 'Apply Tags - Offline', 'wp-fusion' ),
+				'desc'     => sprintf( __( 'Apply these tags in %s when an offline donation is given.', 'wp-fusion' ), wp_fusion()->crm->name ),
+				'id'       => 'apply_tags_offline',
+				'type'     => 'select4',
+				'callback' => array( $this, 'select_callback' ),
+			);
+
+		return $settings;
+	}
+
+
 	/**
 	 * Render WPF select box
 	 *
@@ -987,6 +1031,7 @@ class WPF_Give extends WPF_Integrations_Base {
 			'apply_tags_cancelled' => array(),
 			'apply_tags_failed'    => array(),
 			'apply_tags_level'     => array(),
+			'apply_tags_offline'   => array(),
 		);
 
 		$settings = array_merge( $defaults, $settings );

@@ -57,14 +57,9 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 		add_filter( 'wpf_configure_settings', array( $this, 'register_settings' ), 15, 2 );
 		add_filter( 'wpf_meta_field_groups', array( $this, 'add_meta_field_group' ) );
 		add_filter( 'wpf_meta_fields', array( $this, 'prepare_meta_fields' ), 15 );
-		add_action( 'admin_enqueue_scripts', array( $this, 'scripts' ) );
 
 		// WooFunnels settings.
-		add_action( 'wffn_optin_action_tabs', array( $this, 'optin_tab' ) );
-		add_action( 'wffn_optin_action_tabs_content', array( $this, 'optin_tab_content' ) );
 		add_action( 'wfopp_default_actions_settings', array( $this, 'optin_default' ) );
-		add_action( 'wfopp_localized_data', array( $this, 'optin_localize' ) );
-		add_action( 'admin_print_footer_scripts', array( $this, 'optin_settings_js' ), 9999 );
 
 		/**
 		 * Process optin hook
@@ -74,9 +69,7 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 		/**
 		 * Settings related hooks
 		 */
-		add_action( 'admin_enqueue_scripts', array( $this, 'upsell_localize' ), 100 );
 		add_filter( 'wfocu_offer_settings_default', array( $this, 'upsell_defaults' ) );
-		add_action( 'admin_footer', array( $this, 'upsells_settings_js' ) );
 
 		/**
 		 * Process Upsell Hook
@@ -84,14 +77,29 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 		add_action( 'wfocu_offer_accepted_and_processed', array( $this, 'handle_upsell_accept' ) );
 		add_action( 'wfocu_offer_rejected_event', array( $this, 'handle_upsell_reject' ) );
 
+		if ( defined( 'WFFN_VERSION' ) && version_compare( WFFN_VERSION, '3.0', '>=' ) ) {
+			add_filter( 'wffn_offer_admin_settings_fields', array( $this, 'register_fusion_offer_setting' ), 10, 2 );
+			add_filter( 'update_offer', array( $this, 'update_offer_crm_setting' ), 99, 1 );
+
+			add_filter( 'wfopp_default_actions_args', array( $this, 'register_fusion_optin_crm' ), 10, 2 );
+			add_filter( 'wffn_update_optin_actions_settings', array( $this, 'update_optin_crm_setting' ), 99, 1 );
+
+		} else {
+			add_action( 'admin_enqueue_scripts', array( $this, 'upsell_localize' ), 100 );
+			add_action( 'admin_footer', array( $this, 'upsells_settings_js' ) );
+			add_action( 'wffn_optin_action_tabs', array( $this, 'optin_tab' ) );
+			add_action( 'wffn_optin_action_tabs_content', array( $this, 'optin_tab_content' ) );
+			add_action( 'wfopp_localized_data', array( $this, 'optin_localize' ) );
+			add_action( 'admin_print_footer_scripts', array( $this, 'optin_settings_js' ), 9999 );
+		}
 	}
 
 	/**
 	 * Syncs the order on the Primary Order Accepted status, if enabled.
 	 *
-	 * @since 3.41.1
-	 *
 	 * @param int $order_id The order ID.
+	 *
+	 * @since 3.41.1
 	 */
 	public function primary_order_accepted( $order_id ) {
 
@@ -109,6 +117,7 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	 * @since 3.41.1
 	 *
 	 * @param array $statuses The valid statuses.
+	 *
 	 * @return array The valid statuses.
 	 */
 	public function order_statuses( $statuses ) {
@@ -167,13 +176,13 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	/**
 	 * Registers WooFunnels settings.
 	 *
-	 * @since  3.37.19
+	 * @since 3.37.19
 	 *
-	 * @param  array $settings The settings.
-	 * @param  array $options  The saved options.
+	 * @param array $settings The settings.
+	 * @param array $options The saved options.
+	 *
 	 * @return array The settings.
 	 */
-
 	public function register_settings( $settings, $options ) {
 
 		$settings['woofunnels_header'] = array(
@@ -197,33 +206,14 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 
 
 	/**
-	 * Enqueue multiselect scripts.
-	 *
-	 * @since 3.37.14
-	 */
-	public function scripts() {
-
-		if ( function_exists( 'WFFN_Core' ) && function_exists( 'WFOCU_Core' ) && ! empty( WFOCU_Core()->admin ) && WFOCU_Core()->admin->is_upstroke_page( 'offers' ) ) {
-
-			wp_enqueue_style( 'wffn-vue-multiselect', WFFN_Core()->get_plugin_url() . '/admin/assets/vuejs/vue-multiselect.min.css', array(), WFFN_VERSION_DEV );
-
-			wp_enqueue_script( 'wffn-vuejs', WFFN_Core()->get_plugin_url() . '/admin/assets/vuejs/vue.min.js', array(), '2.6.10' );
-			wp_enqueue_script( 'wffn-vue-vfg', WFFN_Core()->get_plugin_url() . '/admin/assets/vuejs/vfg.min.js', array(), '2.3.4' );
-			wp_enqueue_script( 'wffn-vue-multiselect', WFFN_Core()->get_plugin_url() . '/admin/assets/vuejs/vue-multiselect.min.js', array(), WFFN_VERSION_DEV );
-
-		}
-
-	}
-
-	/**
 	 * Adds WooFunnels field group to meta fields list.
 	 *
-	 * @since  3.37.19
+	 * @since 3.37.19
 	 *
-	 * @param  array $field_groups The field groups.
-	 * @return array  Field groups
+	 * @param array $field_groups The field groups.
+	 *
+	 * @return array Field groups.
 	 */
-
 	public function add_meta_field_group( $field_groups ) {
 
 		$field_groups['woofunnels'] = array(
@@ -238,10 +228,11 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	/**
 	 * Sets field labels and types for WooFunnels custom fields.
 	 *
-	 * @since  3.37.19
+	 * @since 3.37.19
 	 *
-	 * @param  array $meta_fields The meta fields.
-	 * @return array  Meta fields
+	 * @param array $meta_fields The meta fields.
+	 *
+	 * @return array  Meta fields.
 	 */
 	public function prepare_meta_fields( $meta_fields ) {
 
@@ -312,9 +303,10 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	/**
 	 * Register optin defaults.
 	 *
-	 * @since  3.37.14
+	 * @since 3.37.14
 	 *
-	 * @param  array $actions_defaults The actions defaults.
+	 * @param array $actions_defaults The actions defaults.
+	 *
 	 * @return array The actions defaults.
 	 */
 	public function optin_default( $actions_defaults ) {
@@ -328,18 +320,21 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	/**
 	 * Prepare the available tags (optins).
 	 *
-	 * @since  3.37.14
+	 * @since 3.37.14
 	 *
-	 * @param  array $data   The localize data.
+	 * @param array $data The localize data.
+	 *
 	 * @return array The localize data.
 	 */
 	public function optin_localize( $data ) {
 		$all_available_tags = wp_fusion()->settings->get_available_tags_flat();
-		$options = [];
+
+		$options = array();
+
 		foreach ( $all_available_tags as $id => $label ) {
 
 			$options[] = array(
-				'id'   => $id,
+				'id'   => strval( $id ),
 				'name' => $label,
 			);
 
@@ -374,7 +369,7 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 			foreach ( $all_available_tags as $id => $label ) {
 
 				$options[] = array(
-					'id'   => $id,
+					'id'   => strval( $id ),
 					'name' => $label,
 				);
 
@@ -395,54 +390,53 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 
 		?>
 		<script>
-            (function ($, doc, win) {
+			(function ($, doc, win) {
 
-					if (typeof window.wffnBuilderCommons !== "undefined") {
+				if (typeof window.wffnBuilderCommons !== "undefined") {
 
-						window.wffnBuilderCommons.addFilter('wffn_js_optin_vue_data', function (e) {
-							let custom_settings_valid_fields = [
-								{
-									type: "radios",
-									label: "<?php _e( 'Enable Integration', 'wp-fusion' ); ?>",
-									model: "op_wpfusion_enable",
-									values: () => {
-										return wfop_action.op_wpfusion_optin_radio_vals
-									},
-									hint: "<?php printf( __( 'Select Yes to sync optins with %s.', 'wp-fusion' ), wp_fusion()->crm->name ); ?>",
+					window.wffnBuilderCommons.addFilter('wffn_js_optin_vue_data', function (e) {
+						let custom_settings_valid_fields = [
+							{
+								type: "radios",
+								label: "<?php _e( 'Enable Integration', 'wp-fusion' ); ?>",
+								model: "op_wpfusion_enable",
+								values: () => {
+									return wfop_action.op_wpfusion_optin_radio_vals
 								},
-								{
-									type: "vueMultiSelect",
-									label: "<?php _e( 'Apply Tags - Optin Submitted', 'wp-fusion' ); ?>",
-									placeholder: "<?php _e( 'Select tags', 'wp-fusion' ); ?>",
-									model: "op_wpfusion_optin_tags",
-									selectOptions: {hideNoneSelectedText: true},
-									hint: "<?php printf( __( 'Select tags to be applied in %s when this form is submitted.', 'wp-fusion' ), wp_fusion()->crm->name ); ?>",
-									values: () => {
-										return wfop_action.op_wpfusion_optin_tags_vals
-									},
-									selectOptions: {
-										multiple: true,
-										key: "id",
-										label: "name",
-									},
-									visible: function (model) {
-										return (model.op_wpfusion_enable === 'true');
-									},
+								hint: "<?php printf( __( 'Select Yes to sync optins with %s.', 'wp-fusion' ), wp_fusion()->crm->name ); ?>",
+							},
+							{
+								type: "vueMultiSelect",
+								label: "<?php _e( 'Apply Tags - Optin Submitted', 'wp-fusion' ); ?>",
+								placeholder: "<?php _e( 'Select tags', 'wp-fusion' ); ?>",
+								model: "op_wpfusion_optin_tags",
+								hint: "<?php printf( __( 'Select tags to be applied in %s when this form is submitted.', 'wp-fusion' ), wp_fusion()->crm->name ); ?>",
+								values: () => {
+									return wfop_action.op_wpfusion_optin_tags_vals
 								},
+								selectOptions: {
+									multiple: true,
+									key: "id",
+									label: "name",
+								},
+								visible: function (model) {
+									return (model.op_wpfusion_enable === 'true');
+								},
+							},
 
 
-							];
-							e.schemaFusion = {
-								groups: [{
-									legend: '<?php _e( 'WP Fusion', 'wp-fusion' ); ?>',
-									fields: custom_settings_valid_fields
-								}]
-							};
-							e.modelFusion = wfop_action.action_options;
-							return e;
-						});
-					}
-            })(jQuery, document, window);
+						];
+						e.schemaFusion = {
+							groups: [{
+								legend: '<?php _e( 'WP Fusion', 'wp-fusion' ); ?>',
+								fields: custom_settings_valid_fields
+							}]
+						};
+						e.modelFusion = wfop_action.action_options;
+						return e;
+					});
+				}
+			})(jQuery, document, window);
 
 		</script>
 		<?php
@@ -451,9 +445,10 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	/**
 	 * Upsell defaults.
 	 *
-	 * @since  3.37.14
+	 * @since 3.37.14
 	 *
-	 * @param  object $object The object.
+	 * @param object $object The object.
+	 *
 	 * @return object The object.
 	 */
 	public function upsell_defaults( $object ) {
@@ -490,7 +485,6 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 								label: "",
 								model: "wfocu_wpfusion_offer_accept_tags",
 								placeholder: "<?php _e( 'Select tags', 'wp-fusion' ); ?>",
-								selectOptions: {hideNoneSelectedText: true},
 								values: () => {
 									return wfocuWPF.wpfusion_tags
 								},
@@ -512,7 +506,6 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 								label: "",
 								model: "wfocu_wpfusion_offer_reject_tags",
 								placeholder: "<?php _e( 'Select tags', 'wp-fusion' ); ?>",
-								selectOptions: {hideNoneSelectedText: true},
 								values: () => {
 									return wfocuWPF.wpfusion_tags
 								},
@@ -539,7 +532,7 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	 *
 	 * @since 3.37.14
 	 *
-	 * @param int   $optin_id    The optin ID.
+	 * @param int   $optin_id The optin ID.
 	 * @param array $posted_data The posted data.
 	 */
 	public function handle_optin_submission( $optin_id, $posted_data ) {
@@ -596,29 +589,54 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	 */
 	public function handle_upsell_accept( $offer_id ) {
 
-		$order = WFOCU_Core()->data->get( 'porder', false, '_orders' );
+		$order      = WFOCU_Core()->data->get( 'porder', false, '_orders' );
+		$offer_data = WFOCU_Core()->data->get( '_current_offer' );
 
-		$get_offer_data = WFOCU_Core()->data->get( '_current_offer' );
+		// In case the upsell was accepted after the order has already gone to processing/completed.
 
-		if ( ! empty( $get_offer_data->settings->wfocu_wpfusion_offer_accept_tags ) ) {
+		if ( 'processing' === $order->get_status() || 'completed' === $order->get_status() ) {
 
-			$offer_tags = array();
+			$apply_tags = array();
 
-			foreach ( $get_offer_data->settings->wfocu_wpfusion_offer_accept_tags as $tag ) {
-				$offer_tags[] = $tag['id'];
+			foreach ( $order->get_items() as $item ) {
+
+				foreach ( $offer_data->products as $product_id ) {
+
+					if ( intval( $item->get_product_id() ) === intval( $product_id ) ) {
+
+						$apply_tags = array_merge( $apply_tags, wp_fusion()->integrations->woocommerce->get_apply_tags_for_order_item( $item, $order ) );
+
+					}
+				}
 			}
+		}
+
+		if ( ! empty( $offer_data->settings->wfocu_wpfusion_offer_accept_tags ) ) {
+
+			foreach ( $offer_data->settings->wfocu_wpfusion_offer_accept_tags as $tag ) {
+				$apply_tags[] = $tag['id'];
+			}
+
+		}
+
+		if ( ! empty( $apply_tags ) ) {
 
 			$user_id    = $order->get_user_id();
 			$contact_id = wp_fusion()->integrations->woocommerce->get_contact_id_from_order( $order );
 
+			if ( empty( $contact_id ) ) {
+				// Contact not created yet. Add it.
+				$contact_id = wp_fusion()->integrations->woocommerce->create_update_customer( $order );
+			}
+
 			if ( ! empty( $user_id ) ) {
 
-				wp_fusion()->user->apply_tags( $offer_tags, $user_id );
+				wp_fusion()->user->apply_tags( $apply_tags, $user_id );
 
 			} elseif ( ! empty( $contact_id ) ) {
 
-				wpf_log( 'info', 0, 'Applying Offer Accepted tags to guest contact #' . $contact_id . ': ', array( 'tag_array' => $offer_tags ) );
-				wp_fusion()->crm->apply_tags( $offer_tags, $contact_id );
+				wpf_log( 'info', 0, 'Applying Offer Accepted tags to guest contact #' . $contact_id . ': ', array( 'tag_array' => $apply_tags ) );
+				wp_fusion()->crm->apply_tags( $apply_tags, $contact_id );
 
 			}
 		}
@@ -628,7 +646,7 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 		// WooFunnels (default 15 mins). We need to update the invoice in the CRM
 		// with the upsell details.
 
-		if ( 'processing' === $order->get_status() && function_exists( 'wp_fusion_ecommerce' ) && ( 'drip' === wp_fusion()->crm->slug || 'activecampaign' === wp_fusion()->crm->slug ) ) {
+		if ( ( 'processing' === $order->get_status() || 'completed' === $order->get_status() ) && function_exists( 'wp_fusion_ecommerce' ) && ( 'drip' === wp_fusion()->crm->slug || 'activecampaign' === wp_fusion()->crm->slug ) ) {
 
 			delete_post_meta( $order->get_id(), 'wpf_ec_complete' ); // unlock it.
 			wp_fusion_ecommerce()->integrations->woocommerce->send_order_data( $order->get_id() );
@@ -642,7 +660,7 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 	 *
 	 * @since 3.37.14
 	 *
-	 * @param array $args   The arguments.
+	 * @param array $args The arguments.
 	 */
 	public function handle_upsell_reject( $args ) {
 
@@ -670,6 +688,11 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 
 			$contact_id = $order->get_meta( WPF_CONTACT_ID_META_KEY );
 
+			if ( empty( $contact_id ) ) {
+				// Contact not created yet. Add it.
+				$contact_id = wp_fusion()->integrations->woocommerce->create_update_customer( $order );
+			}
+
 			if ( ! empty( $contact_id ) ) {
 
 				wpf_log( 'info', 0, 'Applying Offer Rejected tags to guest contact #' . $contact_id . ': ', array( 'tag_array' => $offer_tags ) );
@@ -678,6 +701,254 @@ class WPF_WooFunnels extends WPF_Integrations_Base {
 		}
 	}
 
+	/**
+	 * Register wp fusion setting in offer admin for compatible funnel builder 3.0.
+	 *
+	 * @since 3.42.6
+	 *
+	 * @param array $args The arguments.
+	 * @param array $values The values.
+	 */
+	public function register_fusion_offer_setting( $args, $values ) {
+
+		// Get all available tags.
+		$all_available_tags = wp_fusion()->settings->get_available_tags_flat();
+		$options            = array();
+		$accept_tags        = '';
+		$reject_tags        = '';
+
+		// Prepare data for according funnel builder react UI.
+		if ( is_array( $all_available_tags ) && count( $all_available_tags ) > 0 ) {
+			foreach ( $all_available_tags as $id => $label ) {
+				$options[] = array(
+					'value' => $id,
+					'label' => $label,
+				);
+			}
+		}
+
+		// Migrate accepted data maybe save in old format.
+		if ( isset( $values['wfocu_wpfusion_offer_accept_tags'] ) && is_array( $values['wfocu_wpfusion_offer_accept_tags'] ) && count( $values['wfocu_wpfusion_offer_accept_tags'] ) > 0 ) {
+			$values['wfocu_wpfusion_offer_accept_tags'] = array_map(
+				function ( $item ) {
+					$item['value'] = $item['id'];
+					$item['label'] = $item['name'];
+					unset( $item['id'] );
+					unset( $item['name'] );
+
+					return $item;
+				},
+				$values['wfocu_wpfusion_offer_accept_tags']
+			);
+
+			$accept_tags = $values['wfocu_wpfusion_offer_accept_tags'];
+		}
+
+		// Migrate rejected data maybe save in old format.
+		if ( isset( $values['wfocu_wpfusion_offer_reject_tags'] ) && is_array( $values['wfocu_wpfusion_offer_reject_tags'] ) && count( $values['wfocu_wpfusion_offer_accept_tags'] ) > 0 ) {
+			$values['wfocu_wpfusion_offer_reject_tags'] = array_map(
+				function ( $item ) {
+					$item['value'] = $item['id'];
+					$item['label'] = $item['name'];
+					unset( $item['id'] );
+					unset( $item['name'] );
+
+					return $item;
+				},
+				$values['wfocu_wpfusion_offer_reject_tags']
+			);
+
+			$reject_tags = $values['wfocu_wpfusion_offer_reject_tags'];
+		}
+
+		$fusion_fields = array(
+			'wfocu_wpfusion_offer_accept_tags' => $accept_tags,
+			'wfocu_wpfusion_offer_reject_tags' => $reject_tags,
+		);
+
+		$args['wp_fusion'] = array(
+			'title'    => __( 'WP Fusion', 'wp-fusion' ),
+			'heading'  => __( 'WP Fusion', 'wp-fusion' ),
+			'slug'     => 'wffn_wp_fusion',
+			'fields'   => array(
+				0 => array(
+					'type'        => 'multi-select',
+					'key'         => 'wfocu_wpfusion_offer_accept_tags',
+					'placeholder' => __( 'Select tags', 'wp-fusion' ),
+					'label'       => __( 'Apply Tags - Offer Accepted', 'wp-fusion' ),
+					'hint'        => '',
+					'required'    => false,
+					'values'      => $options,
+				),
+				1 => array(
+					'type'        => 'multi-select',
+					'key'         => 'wfocu_wpfusion_offer_reject_tags',
+					'placeholder' => __( 'Select tags', 'wp-fusion' ),
+					'label'       => __( 'Apply Tags - Offer Rejected', 'wp-fusion' ),
+					'hint'        => '',
+					'required'    => false,
+					'values'      => $options,
+				),
+			),
+			'priority' => 10,
+			'values'   => $fusion_fields,
+		);
+
+		return $args;
+	}
+
+	/**
+	 * Save WP Fusion settings in offer admin for funnel builder 3.0.
+	 *
+	 * @since 3.42.6
+	 *
+	 * @param object $values The values.
+	 */
+	public function update_offer_crm_setting( $values ) {
+
+		if ( empty( $values ) || empty( $values->settings ) || ! isset( $values->settings->wfocu_wpfusion_offer_accept_tags ) ) {
+			return $values;
+		}
+		if ( is_array( $values->settings->wfocu_wpfusion_offer_accept_tags ) && count( $values->settings->wfocu_wpfusion_offer_accept_tags ) > 0 ) {
+			$values->settings->wfocu_wpfusion_offer_accept_tags = array_map(
+				function ( $item ) {
+					$item['id']   = $item['value'];
+					$item['name'] = $item['label'];
+					unset( $item['value'] );
+					unset( $item['label'] );
+
+					return $item;
+				},
+				$values->settings->wfocu_wpfusion_offer_accept_tags
+			);
+		}
+
+		if ( is_array( $values->settings->wfocu_wpfusion_offer_reject_tags ) && count( $values->settings->wfocu_wpfusion_offer_reject_tags ) > 0 ) {
+			$values->settings->wfocu_wpfusion_offer_reject_tags = array_map(
+				function ( $item ) {
+					$item['id']   = $item['value'];
+					$item['name'] = $item['label'];
+					unset( $item['value'] );
+					unset( $item['label'] );
+
+					return $item;
+				},
+				$values->settings->wfocu_wpfusion_offer_reject_tags
+			);
+		}
+
+		return $values;
+	}
+
+	/**
+	 * Register WP Fusion settings in optin admin for funnel builder 3.0.
+	 *
+	 * @since 3.42.6
+	 *
+	 * @param array $args The arguments.
+	 * @param array $values The values.
+	 */
+	public function register_fusion_optin_crm( $args, $values ) {
+
+		// Get all available tags.
+		$all_available_tags = wp_fusion()->settings->get_available_tags_flat();
+		$options            = array();
+
+		// Prepare data for according funnel builder react UI.
+		if ( is_array( $all_available_tags ) && count( $all_available_tags ) > 0 ) {
+			foreach ( $all_available_tags as $id => $label ) {
+				$options[] = array(
+					'value' => $id,
+					'label' => $label,
+				);
+			}
+		}
+
+		if ( is_array( $values['op_wpfusion_optin_tags'] ) && count( $values['op_wpfusion_optin_tags'] ) > 0 ) {
+			$values['op_wpfusion_optin_tags'] = array_map(
+				function ( $item ) {
+					$item['value'] = $item['id'];
+					$item['label'] = $item['name'];
+					unset( $item['id'] );
+					unset( $item['name'] );
+
+					return $item;
+				},
+				$values['op_wpfusion_optin_tags']
+			);
+		}
+
+		$fusion_fields = array(
+			'op_wpfusion_enable'     => ! empty( $values['op_wpfusion_enable'] ) ? $values['op_wpfusion_enable'] : 'false',
+			'op_wpfusion_optin_tags' => ( ! empty( $values['op_wpfusion_optin_tags'] ) && is_array( $values['op_wpfusion_optin_tags'] ) ) ? $values['op_wpfusion_optin_tags'] : '',
+		);
+
+		$args['wffn_wp_fusion'] = array(
+			'title'    => __( 'WP Fusion', 'wp-fusion' ),
+			'heading'  => __( 'WP Fusion', 'wp-fusion' ),
+			'slug'     => 'wffn_wp_fusion',
+			'fields'   => array(
+				0 => array(
+					'type'    => 'radios',
+					'key'     => 'op_wpfusion_enable',
+					'label'   => __( 'Enable Integration', 'wp-fusion' ),
+					'default' => 'false',
+					'values'  => array(
+						0 => array(
+							'value' => 'true',
+							'name'  => __( 'Yes', 'wp-fusion' ),
+						),
+						1 => array(
+							'value' => 'false',
+							'name'  => __( 'No', 'wp-fusion' ),
+						),
+					),
+				),
+				1 => array(
+					'type'        => 'multi-select',
+					'key'         => 'op_wpfusion_optin_tags',
+					'placeholder' => __( 'Select tags', 'wp-fusion' ),
+					'label'       => __( 'Apply Tags - Optin Submitted', 'wp-fusion' ),
+					'hint'        => __( 'Select tags to be applied in when this form is submitted', 'wp-fusion' ),
+					'required'    => false,
+					'toggler'     => array(
+						'key'   => 'op_wpfusion_enable',
+						'value' => 'true',
+					),
+					'values'      => $options,
+				),
+			),
+			'priority' => 10,
+			'values'   => $fusion_fields,
+		);
+
+		return $args;
+	}
+
+	/**
+	 * Save WP Fusion settings in optin admin for Funnel Builder 3.0.
+	 *
+	 * @since 3.42.6
+	 *
+	 * @param array $values The values.
+	 */
+	public function update_optin_crm_setting( $values ) {
+		if ( isset( $values['op_wpfusion_optin_tags'] ) && is_array( $values['op_wpfusion_optin_tags'] ) && count( $values['op_wpfusion_optin_tags'] ) > 0 ) {
+			$values['op_wpfusion_optin_tags'] = array_map(
+				function ( $item ) {
+					$item['id']   = $item['value'];
+					$item['name'] = $item['label'];
+					unset( $item['value'] );
+					unset( $item['label'] );
+
+					return $item;
+				},
+				$values['op_wpfusion_optin_tags']
+			);
+		}
+
+		return $values;
+	}
 }
 
 new WPF_WooFunnels();

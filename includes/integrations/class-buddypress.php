@@ -22,7 +22,7 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 	 * @since 3.38.14
 	 * @var string $name
 	 */
-	public $name;
+	public $name = 'BuddyPress';
 
 	/**
 	 * The link to the documentation on the WP Fusion website.
@@ -105,7 +105,7 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 			add_filter( 'wpf_restrict_content_post_type_object_label', array( $this, 'groups_meta_box_object_label' ), 10, 2 );
 			add_action( 'wpf_meta_box_content', array( $this, 'groups_meta_box_notice' ), 5, 2 );
 			add_filter( 'wpf_settings_for_meta_box', array( $this, 'groups_meta_box_settings' ), 10, 2 );
-			add_filter( 'wpf_post_access_meta', array( $this, 'groups_access_meta' ) );
+			add_filter( 'wpf_post_access_meta', array( $this, 'groups_access_meta' ), 10, 2 );
 			add_action( 'wpf_filtering_page_content', array( $this, 'filter_group_content' ) );
 		}
 
@@ -122,6 +122,8 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 			// BuddyBoss access control
 			add_filter( 'bb_get_access_control_lists', array( $this, 'get_access_control_lists' ) );
 			add_filter( 'groups_get_group_potential_invites_requests_args', array( $this, 'invites_requests_args' ) );
+			add_filter( 'bp_after_groups_template_parse_args', array( $this, 'exclude_restricted_groups' ) );
+			add_filter( 'bp_rest_groups_get_items_query_args', array( $this, 'exclude_restricted_groups' ) );
 		}
 
 		// BuddyBoss app
@@ -225,7 +227,7 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 	 * @return  int Post ID
 	 */
 
-	public function get_bb_page_id( $post_id ) {
+	public function get_bb_page_id( $post_id = 0 ) {
 
 		if ( $post_id != 0 ) {
 			return $post_id;
@@ -697,6 +699,11 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 
 			if ( strpos( $key, 'bbp_field_' ) !== false ) {
 
+				if ( empty( $value ) ) {
+					// Fixes Uncaught TypeError: trim(): Argument #1 ($string) must be of type string, array given in BP_XProfile_ProfileData:247.
+					$value = ''; 
+				}
+
 				$field_id = str_replace( 'bbp_field_', '', $key );
 
 				$field        = new BP_XProfile_ProfileData( $field_id, $user_id );
@@ -1007,7 +1014,12 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 
 					wpf_log( 'info', $user_id, 'Adding user to BuddyPress group <a href="' . admin_url( 'admin.php?page=bp-groups&gid=' . $group->id . '&action=edit' ) . '">' . $group->name . '</a> and making them an organizer, from linked tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
 
-					groups_join_group( $group->id, $user_id );
+					$result = groups_join_group( $group->id, $user_id );
+
+					if ( false === $result ) {
+						wpf_log( 'error', $user_id, 'Unknown error adding user to group. <a href="https://wpfusion.com/contact/" target="_blank">Contact WP Fusion support</a>.' );
+					}
+
 					groups_promote_member( $user_id, $group->id, 'admin' );
 
 				} elseif ( in_array( $tag_id, $user_tags ) && groups_is_user_member( $user_id, $group->id ) && ! groups_is_user_admin( $user_id, $group->id ) ) {
@@ -1035,14 +1047,20 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 
 					wpf_log( 'info', $user_id, 'Adding user to BuddyPress group <a href="' . admin_url( 'admin.php?page=bp-groups&gid=' . $group->id . '&action=edit' ) . '">' . $group->name . '</a>, from linked tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
 
-					groups_join_group( $group->id, $user_id );
+					$result = groups_join_group( $group->id, $user_id );
 
+					if ( false === $result ) {
+						wpf_log( 'error', $user_id, 'Unknown error adding user to group. <a href="https://wpfusion.com/contact/" target="_blank">Contact WP Fusion support</a>.' );
+					}
 				} elseif ( ! in_array( $tag_id, $user_tags ) && in_array( $group->id, $user_group_ids ) ) {
 
 					wpf_log( 'info', $user_id, 'Removing user from BuddyPress group <a href="' . admin_url( 'admin.php?page=bp-groups&gid=' . $group->id . '&action=edit' ) . '">' . $group->name . '</a>, from linked tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
 
-					groups_leave_group( $group->id, $user_id );
+					$result = groups_leave_group( $group->id, $user_id );
 
+					if ( false === $result ) {
+						wpf_log( 'error', $user_id, 'Unknown error removing user from group. <a href="https://wpfusion.com/contact/" target="_blank">Contact WP Fusion support</a>.' );
+					}
 				}
 			}
 		}
@@ -1234,15 +1252,26 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 	 * @param  array $settings The access settings.
 	 * @return array The settings.
 	 */
-	public function groups_access_meta( $settings ) {
+	public function groups_access_meta( $settings, $post_id ) {
 
-		if ( bp_is_group() && empty( $settings['lock_content'] ) ) {
+		if ( bp_is_groups_component() || false !== strpos( $_SERVER['REQUEST_URI'], '/wp-json/buddyboss/v1/groups' ) ) {
 
-			$group          = groups_get_current_group();
-			$group_settings = groups_get_groupmeta( $group->id, 'wpf-settings' );
+			if ( bp_is_group() && $post_id === $this->get_bb_page_id() ) {
+				// If we're on a single group and the post ID being checked is the groups directory.
+				$group = groups_get_current_group();
+			} elseif ( ! empty( $post_id ) ) {
+				$group = groups_get_group( $post_id );
+			} else {
+				$group = false;
+			}
 
-			if ( ! empty( $group_settings ) ) {
-				return $group_settings;
+			if ( false !== $group && ! empty( $group->id ) ) {
+
+				$group_settings = groups_get_groupmeta( $group->id, 'wpf-settings' );
+
+				if ( ! empty( $group_settings ) ) {
+					return $group_settings;
+				}
 			}
 		}
 
@@ -1422,6 +1451,47 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 		}
 
 		return $requests;
+
+	}
+
+	/**
+	 * When filter queries is enabled, hide groups that the user cannot access.
+	 *
+	 * 3.41.18
+	 *
+	 * @param array $args The args passed to BP_Groups_Template::__construct().
+	 * @return array The args.
+	 */
+	public function exclude_restricted_groups( $args ) {
+
+		if ( wpf_get_option( 'hide_archives' ) ) {
+
+			if ( empty( $args['exclude'] ) ) {
+				$args['exclude'] = array();
+			}
+
+			$query_args = array(
+				'fields'   => 'ids',
+				'per_page' => - 1,
+				'meta_query' => array(
+					array(
+						'key'     => 'wpf-settings',
+						'compare' => 'EXISTS',
+					),
+				),
+			);
+
+			$group_ids = groups_get_groups( $query_args );
+
+			foreach ( $group_ids['groups'] as $id ) {
+
+				if ( ! wpf_user_can_access( $id ) ) {
+					$args['exclude'][] = $id;
+				}
+			}
+		}
+
+		return $args;
 
 	}
 

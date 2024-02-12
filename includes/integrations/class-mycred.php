@@ -44,8 +44,8 @@ class WPF_myCRED extends WPF_Integrations_Base {
 		add_action( 'mycred_badge_level_reached', array( $this, 'badge_level_reached' ), 10, 3 );
 
 		// Rank actions
-		add_action( 'updated_user_meta', array( $this, 'rank_updated' ), 10, 4 );
-		add_action( 'added_user_meta', array( $this, 'rank_updated' ), 10, 4 );
+		add_action( 'mycred_rank_promoted', array( $this, 'rank_updated' ), 10, 2 );
+		add_action( 'mycred_rank_demoted', array( $this, 'rank_updated' ), 10, 2 );
 
 		// Assign / remove linked badges and ranks
 		add_action( 'wpf_tags_modified', array( $this, 'update_linked_badges' ), 10, 2 );
@@ -85,17 +85,15 @@ class WPF_myCRED extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Apply tags when rank earned
+	 * Apply tags when rank earned.
 	 *
-	 * @access public
-	 * @return void
+	 * @since 3.8
+	 * 
+	 * @param int $user_id The user ID.
+	 * @param int $rank_id The rank ID.
 	 */
 
-	public function rank_updated( $meta_id, $user_id, $meta_key, $rank_id ) {
-
-		if ( ! defined( 'MYCRED_RANK_KEY' ) || MYCRED_RANK_KEY !== $meta_key ) {
-			return;
-		}
+	public function rank_updated( $user_id, $rank_id ) {
 
 		$settings = get_post_meta( $rank_id, 'wpf-settings-mycred', true );
 
@@ -114,7 +112,7 @@ class WPF_myCRED extends WPF_Integrations_Base {
 			if ( ! empty( $apply_tags ) ) {
 
 				// Prevent looping
-				remove_action( 'wpf_tags_modified', array( $this, 'update_linked_ranks' ), 10, 2 );
+				remove_action( 'wpf_tags_modified', array( $this, 'update_linked_ranks' ) );
 
 				wp_fusion()->user->apply_tags( $apply_tags, $user_id );
 

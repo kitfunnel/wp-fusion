@@ -1,7 +1,7 @@
 <?php
-
 use Elementor\Controls_Manager;
 use Elementor\Settings;
+use Elementor\Control_Repeater;
 use Elementor\Plugin;
 use ElementorPro\Modules\Forms\Classes\Form_Record;
 use ElementorPro\Modules\Forms\Controls\Fields_Map;
@@ -12,24 +12,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Exit if accessed directly.
 }
 
-function wpf_add_form_actions() {
-
-	if ( version_compare( ELEMENTOR_PRO_VERSION, '3.5.0', '>=' ) ) {
-		\ElementorPro\Plugin::instance()->modules_manager->get_modules( 'forms' )->actions_registrar->register( new WPF_Elementor_Forms(), 'wpfusion' );
-	} else {
-		\ElementorPro\Plugin::instance()->modules_manager->get_modules( 'forms' )->add_form_action( 'wpfusion', new WPF_Elementor_Forms() );
-	}
-
-}
-
-add_action( 'elementor_pro/init', 'wpf_add_form_actions' );
-
-class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration_Base {
+class WPF_Elementor_Forms extends WPF_Integrations_Base {
 
 	/**
 	 * The slug for WP Fusion's module tracking.
 	 *
-	 * @since 3.38.14
+	 * @since 3.21.1
 	 * @var string $slug
 	 */
 
@@ -38,7 +26,7 @@ class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration
 	/**
 	 * The plugin name for WP Fusion's module tracking.
 	 *
-	 * @since 3.38.14
+	 * @since 3.21.1
 	 * @var string $name
 	 */
 	public $name = 'Elementor Forms';
@@ -46,69 +34,155 @@ class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration
 	/**
 	 * The link to the documentation on the WP Fusion website.
 	 *
-	 * @since 3.38.14
+	 * @since 3.21.1
 	 * @var string $docs_url
 	 */
 	public $docs_url = 'https://wpfusion.com/documentation/lead-generation/elementor-forms/';
 
 
 	/**
-	 * Gets things started
+	 * Gets things started.
 	 *
-	 * @access  public
-	 * @since   1.0
-	 * @return  void
+	 * @since   3.21.1
 	 */
 
-	public function __construct() {
+	public function init() {
 
-		wp_fusion()->integrations->{'elementor-forms'} = $this;
-
-		add_filter( 'get_post_metadata', array( $this, 'update_saved_forms' ), 10, 4 );
+		add_action( 'elementor_pro/init', array( $this, 'add_form_actions' ) );
+		add_action( 'elementor/controls/register', array( $this, 'register_controls' ) );
 
 	}
 
 	/**
-	 * Get action ID
+	 * Registers the form actions.
 	 *
-	 * @access  public
-	 * @return  string ID
+	 * @since 3.41.24
 	 */
+	public function add_form_actions() {
 
+		if ( version_compare( ELEMENTOR_PRO_VERSION, '3.5.0', '>=' ) ) {
+			\ElementorPro\Plugin::instance()->modules_manager->get_modules( 'forms' )->actions_registrar->register( new WPF_Elementor_Forms_Integration(), 'wpfusion' );
+		} else {
+			\ElementorPro\Plugin::instance()->modules_manager->get_modules( 'forms' )->add_form_action( 'wpfusion', new WPF_Elementor_Forms_Integration() );
+		}
+
+	}
+
+	public function register_controls( $controls ) {
+		$controls->register( new WPF_Elementor_Field_Mapping() );
+	}
+
+}
+
+new WPF_Elementor_Forms();
+
+
+/**
+ * Form field mapping.
+ *
+ * @since 3.41.24
+ */
+class WPF_Elementor_Field_Mapping extends Control_Repeater {
+
+	const CONTROL_TYPE = 'wpf_fields_map';
+
+	/**
+	 * Get control type.
+	 *
+	 * Retrieve the control type, in this case `wpf_fields_map`.
+	 *
+	 * @since 3.41.24
+	 *
+	 * @return string Control type.
+	 */
+	public function get_type() {
+		return self::CONTROL_TYPE;
+	}
+
+	/**
+	 * Gets the default settings.
+	 *
+	 * @since 3.41.24
+	 */
+	protected function get_default_settings() {
+		return array_merge(
+			parent::get_default_settings(),
+			array(
+				'render_type' => 'none',
+				'fields'      => array(
+					array(
+						'name' => 'local_id',
+						'type' => Controls_Manager::HIDDEN,
+					),
+					array(
+						'name' => 'remote_id',
+						'type' => Controls_Manager::SELECT,
+					),
+				),
+			)
+		);
+	}
+
+	/**
+	 * Enqueue the admin scripts.
+	 *
+	 * @since 3.41.24
+	 */
+	public function enqueue() {
+		wp_enqueue_script( 'wpf-elementor-forms-script', WPF_DIR_URL . 'assets/js/wpf-elementor-forms.js', array( 'jquery' ), WP_FUSION_VERSION, true );
+
+		wp_localize_script(
+			'wpf-elementor-forms-script',
+			'wpfElementorObject',
+			array(
+				'fields' => ( new WPF_Elementor_Forms_Integration() )->get_fields(),
+			)
+		);
+
+	}
+}
+
+
+class WPF_Elementor_Forms_Integration extends Integration_Base {
+
+	/**
+	 * Get action ID.
+	 *
+	 * @since 3.41.24
+	 * @return string ID
+	 */
 	public function get_name() {
 		return 'wpfusion';
 	}
 
 	/**
-	 * Get action label
+	 * Get action label.
 	 *
-	 * @access  public
-	 * @return  string Label
+	 * @since 3.41.24
+	 * @return string Label
 	 */
-
 	public function get_label() {
-		return 'WP Fusion';
+		return __( 'WP Fusion', 'wp-fusion' );
 	}
 
 	/**
-	 * Get CRM fields
+	 * Get CRM fields.
 	 *
-	 * @access  public
-	 * @return  array fields
+	 * @since 3.41.24
+	 * @return array fields
 	 */
 
 	public function get_fields() {
 
 		$fields = array();
 
-		$fields_merged    = array();
 		$available_fields = wp_fusion()->settings->get_crm_fields_flat();
 
 		foreach ( $available_fields as $field_id => $field_label ) {
 
 			$remote_required = false;
 
-			if ( $field_label == 'Email' ) {
+			if ( 'Email' === $field_label ) {
 				$remote_required = true;
 			}
 
@@ -138,10 +212,10 @@ class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration
 	}
 
 	/**
-	 * Get available tags for select
+	 * Get available tags for select.
 	 *
-	 * @access  public
-	 * @return  array Tags
+	 * @since 3.41.24
+	 * @return array Tags
 	 */
 
 	public function get_tags() {
@@ -165,12 +239,10 @@ class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration
 	}
 
 	/**
-	 * Registers settings
+	 * Registers settings.
 	 *
-	 * @access  public
-	 * @return  void
+	 * @since 3.41.24
 	 */
-
 	public function register_settings_section( $widget ) {
 
 		$widget->start_controls_section(
@@ -207,126 +279,38 @@ class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration
 			)
 		);
 
-		if ( version_compare( ELEMENTOR_PRO_VERSION, '3.2.0', '>=' ) ) {
+		$repeater = new \Elementor\Repeater();
+		$repeater->add_control(
+			'local_id',
+			array(
+				'type'    => Controls_Manager::HIDDEN,
+				'default' => '',
+			)
+		);
 
-			$this->register_fields_map_control( $widget );
+		$repeater->add_control(
+			'remote_id',
+			array(
+				'type'    => Controls_Manager::SELECT,
+				'default' => '',
+			)
+		);
 
-		} else {
-
-			$widget->add_control(
-				'wpf_fields_map',
-				array(
-					'label'     => sprintf( __( '%s Field Mapping', 'wp-fusion' ), wp_fusion()->crm->name ),
-					'type'      => Fields_Map::CONTROL_TYPE,
-					'separator' => 'before',
-					'fields'    => array(
-						array(
-							'name' => 'remote_id',
-							'type' => Controls_Manager::HIDDEN,
-						),
-						array(
-							'name' => 'local_id',
-							'type' => Controls_Manager::SELECT,
-						),
-					),
-					'default'   => $this->get_fields(),
-				)
-			);
-
-		}
+		$widget->add_control(
+			'wpfusion_fields_map',
+			array(
+				'label'       => __( 'Field Mapping', 'elementor-pro' ),
+				'type'        => WPF_Elementor_Field_Mapping::CONTROL_TYPE,
+				'separator'   => 'before',
+				'render_type' => 'none',
+				'fields'      => $repeater->get_controls(),
+			)
+		);
 
 		$widget->end_controls_section();
 
 	}
 
-	/**
-	 * Update saved form data when it's loaded from the DB to detect new form fields (because Elementor support has been useless at helping with this, see https://github.com/elementor/elementor/issues/8938)
-	 *
-	 * @access  public
-	 * @return  null / array Value
-	 */
-
-	public function update_saved_forms( $value, $object_id, $meta_key, $single ) {
-
-		if ( is_admin() && '_elementor_data' == $meta_key && Plugin::$instance->editor->is_edit_mode() ) {
-
-			// Prevent looping
-			remove_filter( 'get_post_metadata', array( $this, 'update_saved_forms' ), 10, 4 );
-
-			$settings = get_post_meta( $object_id, '_elementor_data', true );
-
-			// Quit if the desired setting isn't found or if settings are already an array (no idea why it does that).
-			if ( is_array( $settings ) || false === strpos( $settings, 'wpfusion_fields_map' ) ) {
-				return $value;
-			}
-
-			$original_string = $settings;
-
-			$settings = json_decode( $settings, true );
-
-			$settings = $this->parse_elements_for_form( $settings );
-
-			$value = wp_json_encode( $settings );
-
-			if ( $value !== $original_string && class_exists( 'SitePress' ) ) {
-
-				// Save it back to the database as well.
-
-				// @todo This makes me very nervous, since it could corrupt the saved data. Since we've only had it reported as a conflict with WPML,
-				// at the moment we'll only save the data back to postmeta if WPML (SitePress) is active.
-
-				$save_value = wp_slash( $value );
-
-				update_metadata( 'post', $object_id, '_elementor_data', $save_value );
-
-			}
-		}
-
-		return $value;
-
-	}
-
-	/**
-	 * Loop through saved elements, updating values as necessary
-	 *
-	 * @access  public
-	 * @return  array Elements
-	 */
-
-	private function parse_elements_for_form( $elements ) {
-
-		foreach ( $elements as $i => $element ) {
-
-			if ( isset( $element['settings'] ) && isset( $element['settings']['wpfusion_fields_map'] ) ) {
-
-				$new_settings = $this->get_fields();
-
-				foreach ( $new_settings as $n => $setting ) {
-
-					foreach ( $element['settings']['wpfusion_fields_map'] as $saved_value ) {
-
-						if ( $saved_value['remote_id'] == $setting['remote_id'] ) {
-
-							$new_settings[ $n ] = array_merge( $setting, $saved_value );
-
-						}
-					}
-				}
-
-				$elements[ $i ]['settings']['wpfusion_fields_map'] = $new_settings;
-
-			}
-
-			if ( ! empty( $element['elements'] ) ) {
-
-				$elements[ $i ]['elements'] = $this->parse_elements_for_form( $element['elements'] );
-
-			}
-		}
-
-		return $elements;
-
-	}
 
 	/**
 	 * Unsets WPF settings on export
@@ -348,8 +332,10 @@ class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration
 	/**
 	 * Process form submission
 	 *
-	 * @access  public
-	 * @return  void
+	 * @since 3.21.1
+	 *
+	 * @param  object $record       Elementor form record.
+	 * @param  object $ajax_handler Ajax handler.
 	 */
 
 	public function run( $record, $ajax_handler ) {
@@ -360,44 +346,59 @@ class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration
 		$update_data   = array();
 		$email_address = false;
 
-		foreach ( $form_settings['wpfusion_fields_map'] as $field ) {
+		if ( ! empty( $form_settings['wpfusion_fields_map'] ) ) {
+			foreach ( $form_settings['wpfusion_fields_map'] as $field ) {
 
-			if ( ! empty( $field['local_id'] ) && ! empty( $sent_data[ $field['local_id'] ] ) ) {
+				if ( ! empty( $field['local_id'] ) && ! empty( $sent_data[ $field['local_id'] ] ) && ! empty( $field['remote_id'] ) ) {
 
-				$value = $sent_data[ $field['local_id'] ];
+					$value = $sent_data[ $field['local_id'] ];
 
-				if ( false !== strpos( $field['remote_id'], 'add_tag_' ) ) {
+					if ( false !== strpos( $field['remote_id'], 'add_tag_' ) ) {
 
-					// Don't run the filter on dynamic tagging inputs.
-					$update_data[ $field['remote_id'] ] = $value;
-					continue;
+						// Don't run the filter on dynamic tagging inputs.
+						$update_data[ $field['remote_id'] ] = $value;
+						continue;
 
-				}
+					}
 
-				if ( is_array( $value ) ) {
-					$type = 'checkboxes';
-				} elseif ( 'on' === $value || 'true' === $value ) {
-					$type = 'checkbox'; // boolean true.
-				} elseif ( 'off' === $value || 'false' === $value ) {
-					$type = 'checkbox'; // boolean false.
-				} elseif ( ! is_numeric( $value ) && ! empty( strtotime( $value ) ) && preg_match( '/\\d/', $value ) > 0 ) {
-					$type = 'date';
-				} else {
-					$type = 'text';
-				}
+					if ( is_array( $value ) ) {
+						$type = 'checkboxes';
+					} elseif ( 'on' === $value || 'true' === $value ) {
+						$type = 'checkbox'; // boolean true.
+					} elseif ( 'off' === $value || 'false' === $value ) {
+						$type = 'checkbox'; // boolean false.
+					} elseif ( ! is_numeric( $value ) && false !== strtotime( $value ) && strtotime( $value ) > strtotime( '100 years ago' ) && preg_match( '/\\d/', $value ) > 0 ) {
+						$type = 'date'; // ignore dates more than 100 years in the past.
+					} else {
+						$type = 'text';
+					}
 
-				$update_data[ $field['remote_id'] ] = apply_filters( 'wpf_format_field_value', $value, $type, $field['remote_id'] );
+					$update_data[ $field['remote_id'] ] = apply_filters( 'wpf_format_field_value', $value, $type, $field['remote_id'] );
 
-				// For determining the email address, we'll try to find a field
-				// mapped to the main lookup field in the CRM, but if not we'll take
-				// the first email address on the form.
+					// For determining the email address, we'll try to find a field
+					// mapped to the main lookup field in the CRM, but if not we'll take
+					// the first email address on the form.
 
-				if ( is_string( $value ) && is_email( $value ) && wpf_get_lookup_field() === $field['remote_id'] ) {
-					$email_address = $value;
-				} elseif ( false === $email_address && is_string( $value ) && is_email( $value ) ) {
-					$email_address = $value;
+					if ( is_string( $value ) && is_email( $value ) && wpf_get_lookup_field() === $field['remote_id'] ) {
+						$email_address = $value;
+					} elseif ( false === $email_address && is_string( $value ) && is_email( $value ) ) {
+						$email_address = $value;
+					}
 				}
 			}
+		}
+
+		if ( false === $email_address ) {
+
+			// Try to find any email address, in case it wasn't mapped.
+			foreach ( $sent_data as $value ) {
+
+				if ( is_string( $value ) && is_email( $value ) ) {
+					$email_address = $value;
+					break;
+				}
+			}
+
 		}
 
 		if ( isset( $form_settings['wpf_add_only'] ) && 'yes' == $form_settings['wpf_add_only'] ) {
@@ -409,6 +410,8 @@ class WPF_Elementor_Forms extends ElementorPro\Modules\Forms\Classes\Integration
 		if ( empty( $form_settings['wpf_apply_tags'] ) ) {
 			$form_settings['wpf_apply_tags'] = array();
 		}
+
+		$form_settings['wpf_apply_tags'] = array_map( 'htmlspecialchars_decode', $form_settings['wpf_apply_tags'] );
 
 		if ( empty( $update_data ) && empty( $form_settings['wpf_apply_tags'] ) ) {
 			return;

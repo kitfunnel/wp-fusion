@@ -78,8 +78,8 @@ class WPF_Tribe_Events extends WPF_Integrations_Base {
 				if ( tribe_get_option( 'enable_month_view_cache', false ) ) {
 
 					$notices['tribe-events-cache'] = sprintf(
-						__( '<strong>Note:</strong> You have Filter Queries enabled on the <code>tribe_events</code> post type, but the <strong>Month View Cache</strong> is enabled in your <a href="%s">Event Display Settings</a>. To use Query Filtering with events in month view, you must turn off the month view cache.', 'wp-fusion' ),
-						admin_url( 'edit.php?post_type=tribe_events&page=tribe-common&tab=display' )
+						__( '<strong>Note:</strong> You have Filter Queries enabled on the <code>tribe_events</code> post type, but the <strong>Month View Cache</strong> is enabled in your <a href="%s">Event Calendar Settings</a>. To use Query Filtering with events in month view, you must turn off the month view cache.', 'wp-fusion' ),
+						admin_url( 'edit.php?page=tec-events-settings&tab=general&post_type=tribe_events' )
 					);
 
 				}

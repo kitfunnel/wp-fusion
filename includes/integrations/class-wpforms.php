@@ -155,6 +155,8 @@ class WPF_WPForms extends WPForms_Provider {
 
 					if ( 'checkbox' === $field['type'] ) {
 						$field['type'] = 'checkboxes';
+					} elseif ( 'date-time' === $field['type'] ) {
+						$field['type'] = 'date';
 					}
 
 					if ( false !== strpos( $crm_field, 'add_tag_' ) ) {
@@ -290,7 +292,7 @@ class WPF_WPForms extends WPForms_Provider {
 
 		$form_fields = $this->get_form_fields( $form );
 
-		// Create separate fields from Firs / Last name field
+		// Create separate fields from First / Last name field
 
 		foreach ( (array) $form_fields as $i => $form_field ) {
 

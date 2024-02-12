@@ -10,7 +10,7 @@ class WPF_Forms_Helper {
 	 * Sends data to the CRM from form plugins.
 	 *
 	 * @since   3.24.0
-	 * @return  Contact ID / WP_Error
+	 * @return  string|WP_Error Contact ID or WP_Error on failure.
 	 */
 	public static function process_form_data( $args ) {
 
@@ -18,6 +18,8 @@ class WPF_Forms_Helper {
 			'email_address'    => false,
 			'update_data'      => array(),
 			'apply_tags'       => array(),
+			'remove_tags'      => array(),
+			'apply_lists'      => array(),
 			'auto_login'       => false,
 			'integration_slug' => false,
 			'integration_name' => false,
@@ -168,155 +170,163 @@ class WPF_Forms_Helper {
 			return;
 		}
 
-		// Dynamic tagging.
+		if ( ! empty( $update_data ) ) {
 
-		if ( ! is_array( $apply_tags ) ) {
-			$apply_tags = array();
-		}
+			// Dynamic tagging.
 
-		if ( in_array( 'add_tags', wp_fusion()->crm->supports ) ) {
+			if ( ! is_array( $apply_tags ) ) {
+				$apply_tags = array();
+			}
 
-			foreach ( $update_data as $key => $value ) {
+			if ( in_array( 'add_tags', wp_fusion()->crm->supports ) ) {
 
-				if ( false !== strpos( $key, 'add_tag_' ) ) {
+				foreach ( $update_data as $key => $value ) {
 
-					if ( is_array( $value ) ) {
+					if ( false !== strpos( $key, 'add_tag_' ) ) {
 
-						$apply_tags = array_merge( $apply_tags, $value );
+						if ( is_array( $value ) ) {
 
-					} elseif ( ! empty( $value ) ) {
+							$apply_tags = array_merge( $apply_tags, $value );
 
-						$apply_tags[] = $value;
+						} elseif ( ! empty( $value ) ) {
+
+							$apply_tags[] = $value;
+
+						}
+
+						unset( $update_data[ $key ] );
 
 					}
-
-					unset( $update_data[ $key ] );
-
 				}
 			}
-		}
 
-		// Logging.
+			// Lists.
 
-		$log_text = $integration_name . ' <a href="' . $form_edit_link . '">' . $form_title . '</a> submission, at ';
+			if ( ! empty( $args['apply_lists'] ) ) {
+				$update_data['lists'] = $args['apply_lists'];
+			}
 
-		// Record the page the form is on.
+			// Logging.
 
+			$log_text = $integration_name . ' <a href="' . $form_edit_link . '">' . $form_title . '</a> submission, at ';
 
-		if ( isset( $_REQUEST['referrer'] ) ) {
-			$log_text .= '<a href="' . $_REQUEST['referrer'] . '" target="_blank">' . $_REQUEST['referrer'] . '</a>. ';
-		} elseif ( ! empty( $_SERVER['HTTP_REFERER'] ) ) {
-			$log_text .= '<a href="' . $_SERVER['HTTP_REFERER'] . '" target="_blank">' . $_SERVER['HTTP_REFERER'] . '</a>. ';
-		} elseif ( false === strpos( $_SERVER['REQUEST_URI'], 'admin-ajax.php' ) ) {
-			$log_text .= '<a href="' . $_SERVER['REQUEST_URI'] . '" target="_blank">' . $_SERVER['REQUEST_URI'] . '</a>. ';
-		}
+			// Record the page the form is on.
 
-		// Are we creating a new contact or updating one?
+			if ( isset( $_REQUEST['referrer'] ) ) {
+				$log_text .= '<a href="' . $_REQUEST['referrer'] . '" target="_blank">' . $_REQUEST['referrer'] . '</a>. ';
+			} elseif ( ! empty( $_SERVER['HTTP_REFERER'] ) ) {
+				$log_text .= '<a href="' . $_SERVER['HTTP_REFERER'] . '" target="_blank">' . $_SERVER['HTTP_REFERER'] . '</a>. ';
+			} elseif ( false === strpos( $_SERVER['REQUEST_URI'], 'admin-ajax.php' ) ) {
+				$log_text .= '<a href="' . $_SERVER['REQUEST_URI'] . '" target="_blank">' . $_SERVER['REQUEST_URI'] . '</a>. ';
+			}
 
-		if ( ! empty( $contact_id ) ) {
-			$log_text .= ' Updating existing ' . $object_type . ' #' . $contact_id . ': ';
-		} else {
-			$log_text .= ' Creating new ' . $object_type . ': ';
-		}
+			// Are we creating a new contact or updating one?
 
-		wpf_log(
-			'info',
-			$user_id,
-			$log_text,
-			array(
-				'meta_array_nofilter' => $update_data,
-				'source'              => sanitize_title( $integration_name ),
-			)
-		);
+			if ( ! empty( $contact_id ) ) {
+				$log_text .= ' Updating existing ' . $object_type . ' #' . $contact_id . ': ';
+			} else {
+				$log_text .= ' Creating new ' . $object_type . ': ';
+			}
 
-		if ( ! empty( $contact_id ) && isset( $add_only ) && $add_only == true ) {
+			wpf_log(
+				'info',
+				$user_id,
+				$log_text,
+				array(
+					'meta_array_nofilter' => $update_data,
+					'source'              => sanitize_title( $integration_name ),
+				)
+			);
 
-			wpf_log( 'info', $user_id, ucwords( $object_type ) . ' already exists and <em>Add Only</em> is enabled. Aborting.', array( 'source' => sanitize_title( $integration_name ) ) );
-			return;
+			if ( ! empty( $contact_id ) && isset( $add_only ) && $add_only == true ) {
 
-		}
+				wpf_log( 'info', $user_id, ucwords( $object_type ) . ' already exists and <em>Add Only</em> is enabled. Aborting.', array( 'source' => sanitize_title( $integration_name ) ) );
+				return;
 
-		if ( ! empty( $contact_id ) ) {
+			}
 
-			// Update CRM if contact ID exists.
+			if ( ! empty( $contact_id ) ) {
 
-			add_filter( 'wpf_use_api_queue', function( $use_queue, $method, $args ) {
+				// Update CRM if contact ID exists.
 
-				// We need to bypass the API queue for cases where a user
-				// registration during an auto-login session needs to update an
-				// subscriber's email address (via the form integration) before
-				// registering a new user.
+				add_filter( 'wpf_use_api_queue', function( $use_queue, $method, $args ) {
 
-				if ( 'update_contact' === $method ) {
-					$use_queue = false;
+					// We need to bypass the API queue for cases where a user
+					// registration during an auto-login session needs to update an
+					// subscriber's email address (via the form integration) before
+					// registering a new user.
+
+					if ( 'update_contact' === $method ) {
+						$use_queue = false;
+					}
+
+					return $use_queue;
+
+				}, 10, 3 );
+
+				if ( wpf_get_option( 'leads' ) ) {
+					$result = wp_fusion()->crm->update_lead( $contact_id, $update_data );
+				} else {
+					$result = wp_fusion()->crm->update_contact( $contact_id, $update_data, $map_meta_fields = false );
 				}
 
-				return $use_queue;
+				if ( is_wp_error( $result ) ) {
 
-			}, 10, 3 );
+					wpf_log( $result->get_error_code(), $user_id, 'Error updating ' . $object_type . ': ' . $result->get_error_message(), array( 'source' => sanitize_title( $integration_name ) ) );
 
-			if ( wpf_get_option( 'leads' ) ) {
-				$result = wp_fusion()->crm->update_lead( $contact_id, $update_data );
-			} else {
-				$result = wp_fusion()->crm->update_contact( $contact_id, $update_data, $map_meta_fields = false );
-			}
+					return new WP_Error( 'error', 'Error updating ' . $object_type . ': ' . $result->get_error_message() );
 
-			if ( is_wp_error( $result ) ) {
+				}
 
-				wpf_log( $result->get_error_code(), $user_id, 'Error updating ' . $object_type . ': ' . $result->get_error_message(), array( 'source' => sanitize_title( $integration_name ) ) );
-
-				return new WP_Error( 'error', 'Error updating ' . $object_type . ': ' . $result->get_error_message() );
-
-			}
-
-			do_action( 'wpf_guest_contact_updated', $contact_id, $email_address );
-
-		} else {
-
-			// Add contact if doesn't exist yet.
-
-			if ( wpf_get_option( 'leads' ) ) {
-				$contact_id = wp_fusion()->crm->add_lead( $update_data );
-			} else {
-				$contact_id = wp_fusion()->crm->add_contact( $update_data, false );
-			}
-
-			if ( is_wp_error( $contact_id ) ) {
-
-				wpf_log( $contact_id->get_error_code(), $user_id, 'Error adding ' . $object_type . ' to ' . wp_fusion()->crm->name . ': ' . $contact_id->get_error_message(), array( 'source' => sanitize_title( $integration_name ) ) );
-
-				return new WP_Error( 'error', 'Error adding ' . $object_type . ' to ' . wp_fusion()->crm->name . ': ' . $contact_id->get_error_message() );
-
-			} elseif ( empty( $contact_id ) ) {
-
-				wpf_log( 'error', $user_id, 'Unknown error adding ' . $object_type . ' to ' . wp_fusion()->crm->name . ': no ' . $object_type . ' ID was returned.', array( 'source' => sanitize_title( $integration_name ) ) );
-
-				return new WP_Error( 'error', 'Unknown error adding ' . $object_type . ' to ' . wp_fusion()->crm->name . ': no ' . $object_type . ' ID was returned.' );
+				do_action( 'wpf_guest_contact_updated', $contact_id, $email_address );
 
 			} else {
 
-				wpf_log( 'info', $user_id, 'Successfully created ' . $object_type . ' #' . $contact_id . '.', array( 'source' => sanitize_title( $integration_name ) ) );
+				// Add contact if doesn't exist yet.
+
+				if ( wpf_get_option( 'leads' ) ) {
+					$contact_id = wp_fusion()->crm->add_lead( $update_data );
+				} else {
+					$contact_id = wp_fusion()->crm->add_contact( $update_data, false );
+				}
+
+				if ( is_wp_error( $contact_id ) ) {
+
+					wpf_log( $contact_id->get_error_code(), $user_id, 'Error adding ' . $object_type . ' to ' . wp_fusion()->crm->name . ': ' . $contact_id->get_error_message(), array( 'source' => sanitize_title( $integration_name ) ) );
+
+					return new WP_Error( 'error', ucwords( $contact_id->get_error_code() ) . ' adding ' . $object_type . ' to ' . wp_fusion()->crm->name . ': ' . $contact_id->get_error_message() );
+
+				} elseif ( empty( $contact_id ) ) {
+
+					wpf_log( 'error', $user_id, 'Unknown error adding ' . $object_type . ' to ' . wp_fusion()->crm->name . ': no ' . $object_type . ' ID was returned.', array( 'source' => sanitize_title( $integration_name ) ) );
+
+					return new WP_Error( 'error', 'Unknown error adding ' . $object_type . ' to ' . wp_fusion()->crm->name . ': no ' . $object_type . ' ID was returned.' );
+
+				} else {
+
+					wpf_log( 'info', $user_id, 'Successfully created ' . $object_type . ' #' . $contact_id . '.', array( 'source' => sanitize_title( $integration_name ) ) );
+
+				}
+
+				do_action( 'wpf_guest_contact_created', $contact_id, $email_address );
 
 			}
 
-			do_action( 'wpf_guest_contact_created', $contact_id, $email_address );
+			// If the user is logged in but doesn't have a contact ID, we'll set that here so that subsequent calls to apply_tags() work.
 
-		}
+			if ( wpf_is_user_logged_in() && ! wpf_get_contact_id() ) {
+				update_user_meta( $user_id, WPF_CONTACT_ID_META_KEY, $contact_id );
+			}
 
-		// If the user is logged in but doesn't have a contact ID, we'll set that here so that subsequent calls to apply_tags() work.
+			// Start auto login for guests (before tags are applied).
 
-		if ( wpf_is_user_logged_in() && ! wpf_get_contact_id() ) {
-			update_user_meta( $user_id, WPF_CONTACT_ID_META_KEY, $contact_id );
-		}
+			if ( ( wpf_get_option( 'auto_login_forms' ) || true === $auto_login ) && ! wpf_is_user_logged_in() ) {
 
-		// Start auto login for guests (before tags are applied).
+				wpf_log( 'info', 0, 'Starting auto-login session from form submission for ' . $object_type . ' #' . $contact_id . '.', array( 'source' => sanitize_title( $integration_name ) ) );
+				$user_id = wp_fusion()->auto_login->start_auto_login( $contact_id );
 
-		if ( ( wpf_get_option( 'auto_login_forms' ) || true === $auto_login ) && ! wpf_is_user_logged_in() ) {
-
-			wpf_log( 'info', 0, 'Starting auto-login session from form submission for ' . $object_type . ' #' . $contact_id . '.', array( 'source' => sanitize_title( $integration_name ) ) );
-			$user_id = wp_fusion()->auto_login->start_auto_login( $contact_id );
-
-		}
+			}
+		} // end check to see if update data is empty.
 
 		/**
 		 * Filter the tags.
@@ -336,10 +346,10 @@ class WPF_Forms_Helper {
 		$apply_tags = apply_filters( 'wpf_' . $integration_slug . '_apply_tags_' . $form_id, $apply_tags, $user_id, $contact_id, $form_id );
 
 		// This fixes mixed up array pointers due to unsetting, merging, etc.
-		$apply_tags = array_values( array_filter( $apply_tags ) );
+		$apply_tags = array_values( array_filter( (array) $apply_tags ) );
 
 		// Apply tags if set.
-		if ( ! empty( $apply_tags ) ) {
+		if ( ! empty( $apply_tags ) || ! empty( $remove_tags ) ) {
 
 			// Even if the user is logged in, they may have submitted the form with a different email. This makes sure the tags are applied to the right record.
 			if ( ! empty( $user_id ) && ! doing_wpf_auto_login() ) {
@@ -362,10 +372,32 @@ class WPF_Forms_Helper {
 
 			if ( is_object( $user_info ) && ( $user_info->user_email === $email_address || empty( $email_address ) ) ) {
 
+				if ( ! empty( $remove_tags ) ) {
+					wp_fusion()->user->remove_tags( $remove_tags, $user_id );
+				}
+
 				// If user exists locally and the email address matches, apply the tags locally as well.
 				wp_fusion()->user->apply_tags( $apply_tags, $user_id );
 
 			} else {
+
+				if ( ! empty( $remove_tags ) ) {
+
+					// Maybe remove tags first.
+
+					// Logger.
+					wpf_log(
+						'info',
+						0,
+						$integration_name . ' removing tags: ',
+						array(
+							'tag_array' => $remove_tags,
+							'source'    => sanitize_title( $integration_name ),
+						)
+					);
+
+					wp_fusion()->crm->remove_tags( $remove_tags, $contact_id );
+				}
 
 				// Logger.
 				wpf_log(

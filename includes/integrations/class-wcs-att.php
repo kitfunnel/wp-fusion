@@ -60,7 +60,7 @@ class WPF_WCS_ATT extends WPF_Integrations_Base {
 
 		foreach ( $order->get_items() as $item ) {
 
-			if ( $item->meta_exists( '_wcsatt_scheme' ) ) {
+			if ( $item->meta_exists( '_wcsatt_scheme' ) && wcs_order_contains_subscription( $order ) ) {
 
 				$product_id = $item->get_product_id();
 

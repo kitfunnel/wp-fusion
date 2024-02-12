@@ -79,8 +79,8 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 		// Admin settings.
 		add_action( 'wpf_woocommerce_panel', array( $this, 'panel_content' ), 7 );
 
-		// Subscription sync status meta box..
-		add_action( 'add_meta_boxes_shop_subscription', array( $this, 'add_subscription_meta_box' ) );
+		// Subscription sync status meta box.
+		add_action( 'add_meta_boxes', array( $this, 'add_subscription_meta_box' ) );
 
 		// Batch operations.
 		add_filter( 'wpf_export_options', array( $this, 'export_options' ) );
@@ -365,6 +365,10 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 			$update_data['sub_end_date'] = null; // clear it out if it's lifetime.
 		}
 
+		if ( empty( $update_data['sub_trial_end_date'] ) ) {
+			$update_data['sub_trial_end_date'] = null; // clear it out if it's no longer in trial.
+		}
+
 		foreach ( $subscription->get_items() as $line_item ) {
 
 			$product = $line_item->get_product();
@@ -393,9 +397,14 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 				$update_data[ 'sub_renewal_date_' . $product_id ] = null; // clear it out if it's pending cancel.
 			}
 
-			if ( empty( $update_data['sub_end_date'] ) ) {
-				$update_data['sub_end_date'] = null; // clear it out if it's lifetime.
+			if ( empty( $update_data[ 'sub_end_date_' . $product_id ] ) ) {
+				$update_data[ 'sub_end_date_' . $product_id ] = null; // clear it out if it's lifetime.
 			}
+
+			if ( empty( $update_data[ 'sub_trial_end_date_' . $product_id ] ) ) {
+				$update_data[ 'sub_trial_end_date_' . $product_id ] = null; // clear it out if it's no longer in trial.
+			}
+
 		}
 
 		$update_data = apply_filters( 'wpf_woocommerce_subscription_sync_fields', $update_data, $subscription );
@@ -828,14 +837,30 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 	 */
 	public function process_order_action( $order ) {
 
-		if ( wcs_order_contains_renewal( $order ) ) {
-			$subscriptions = wcs_get_subscriptions_for_order( $order, array( 'order_type' => 'any' ) );
+		$subscriptions = wcs_get_subscriptions_for_order( $order, array( 'order_type' => 'any' ) );
 
-			if ( ! empty( $subscriptions ) ) {
+		if ( ! empty( $subscriptions ) ) {
 
-				foreach ( $subscriptions as $subscription ) {
-					$this->sync_subscription_fields( $subscription );
+			foreach ( $subscriptions as $subscription ) {
+
+				$this->sync_subscription_fields( $subscription );
+
+				// Let other integrations know.
+				foreach ( $subscription->get_items() as $line_item ) {
+
+					$product_id = $line_item->get_product_id();
+
+					if ( 'active' !== $subscription->get_status() && 'pending-cancel' !== $subscription->get_status() ) {
+
+						do_action( 'wpf_woocommerce_product_subscription_inactive', $product_id, $subscription );
+
+					} elseif ( 'active' === $subscription->get_status() ) {
+
+						do_action( 'wpf_woocommerce_product_subscription_active', $product_id, $subscription );
+
+					}
 				}
+
 			}
 		}
 
@@ -916,7 +941,7 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 
 			foreach ( $crm_fields as $crm_key => $crm_value ) {
 
-				if ( false !== strpos( $key, $crm_key . '_' ) ) {
+				if ( 0 === strpos( $key, $crm_key . '_' ) ) {
 
 					$post_id             = str_replace( $crm_key . '_', '', $key );
 					$meta_fields[ $key ] = array(
@@ -1174,7 +1199,17 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 	 */
 	public function add_subscription_meta_box() {
 
-		add_meta_box( 'wpf-status', __( 'WP Fusion', 'wp-fusion' ), array( $this, 'subscription_meta_box_callback' ), 'shop_subscription', 'side', 'core' );
+		if ( wpf_get_option( 'admin_permissions' ) && ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		if ( function_exists( 'wcs_get_page_screen_id' ) ) {
+			$screen = wcs_get_page_screen_id( 'shop_subscription' );
+		} else {
+			$screen = 'shop_subscription';
+		}
+
+		add_meta_box( 'wpf-status', __( 'WP Fusion', 'wp-fusion' ), array( $this, 'subscription_meta_box_callback' ), $screen, 'side', 'core' );
 
 	}
 
@@ -1182,17 +1217,18 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 	 * Display Subscription status meta box.
 	 *
 	 * @since 3.37.9
+	 * @since 3.41.33 Updated to use WC_Subscription object with HPOS.
 	 *
-	 * @param WP_Post $post   The post.
+	 * @param WC_Subscription|WP_Post $subscription   The subscription.
 	 */
-	public function subscription_meta_box_callback( $post ) {
+	public function subscription_meta_box_callback( $subscription ) {
 
-		if ( ! current_user_can( 'manage_woocommerce' ) ) {
-			return;
+		if ( is_a( $subscription, 'WP_Post' ) ) {
+			$subscription = wcs_get_subscription( $subscription->ID );
 		}
 
 		if ( isset( $_GET['subscription_action'] ) && 'wpf_process' === $_GET['subscription_action'] ) {
-			$this->process_subscription_action( wcs_get_subscription( $post->ID ) );
+			$this->process_subscription_action( $subscription );
 		}
 
 		?>
@@ -1200,9 +1236,9 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 		<p class="post-attributes-label-wrapper">
 			<strong><?php _e( 'Parent order:', 'wp-fusion' ); ?></strong>&nbsp;
 			<span>
-				<a href="<?php echo get_edit_post_link( $post->post_parent ); ?>">#<?php esc_attr_e( $post->post_parent, 'wp-fusion' ); ?></a>
+				<a href="<?php echo get_edit_post_link( $subscription->get_parent_id() ); ?>">#<?php esc_attr_e( $subscription->get_parent_id(), 'wp-fusion' ); ?></a>
 
-				<?php if ( get_post_meta( $post->post_parent, 'wpf_complete', true ) ) : ?>
+				<?php if ( get_post_meta( $subscription->get_parent_id(), 'wpf_complete', true ) ) : ?>
 					<span class="dashicons dashicons-yes-alt wpf-tip wpf-tip-bottom" data-tip="<?php printf( __( 'Successfully synced to %s.', 'wp-fusion' ), wp_fusion()->crm->name ); ?>"></span>
 				<?php else : ?>
 					<span class="dashicons dashicons-no wpf-tip wpf-tip-bottom" data-tip="<?php printf( __( 'Not synced to %s.', 'wp-fusion' ), wp_fusion()->crm->name ); ?>"></span>
@@ -1215,11 +1251,10 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 
 		// Renewal order.
 
-		$subscription = wcs_get_subscription( $post->ID );
-		$order_ids    = $subscription->get_related_orders();
-		$order_id     = reset( $order_ids );
+		$order_ids = $subscription->get_related_orders();
+		$order_id  = reset( $order_ids );
 
-		if ( $order_id !== $post->ID ) :
+		if ( $order_id !== $subscription->get_parent_id() ) :
 
 			$order = wc_get_order( $order_id );
 
@@ -1242,7 +1277,7 @@ class WPF_Woo_Subscriptions extends WPF_Integrations_Base {
 		<?php endif; ?>
 
 
-		<?php $contact_id = ( new WPF_Woocommerce() )->get_contact_id_from_order( ( intval( $post->post_parent ) !== 0 ? $post->post_parent : $post->ID ) ); ?>
+		<?php $contact_id = ( new WPF_Woocommerce() )->get_contact_id_from_order( ( intval( $subscription->get_parent_id() ) !== 0 ? $subscription->get_parent_id() : $subscription->ID ) ); ?>
 
 		<?php if ( $contact_id ) : ?>
 

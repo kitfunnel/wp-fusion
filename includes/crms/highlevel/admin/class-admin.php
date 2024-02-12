@@ -160,7 +160,26 @@ class WPF_HighLevel_Admin {
 			'section' => 'setup',
 		);
 
-		if ( empty( $options['highlevel_token'] ) && ! isset( $_GET['code'] ) ) {
+		if ( has_filter( 'wpf_get_setting_highlevel_api_key' ) ) {
+
+			// For white-labeled accounts https://wpfusion.com/documentation/crm-specific-docs/highlevel-white-labelled-accounts/#overview.
+
+			$new_settings['highlevel_location_id'] = array(
+				'title'   => __( 'Your account location ID', 'wp-fusion' ),
+				'desc'    => __( 'Your account location ID which is required for some requests.', 'wp-fusion' ),
+				'type'    => 'text',
+				'section' => 'setup',
+			);
+
+			$new_settings['highlevel_api_key'] = array(
+				'title'       => __( 'API Key', 'wp-fusion' ),
+				'type'        => 'api_validate',
+				'section'     => 'setup',
+				'class'       => 'api_key',
+				'post_fields' => array( 'highlevel_api_key' ),
+			);
+
+		} elseif ( empty( $options['highlevel_token'] ) && ! isset( $_GET['code'] ) ) {
 
 			$new_settings['highlevel_auth'] = array(
 				'title'   => __( 'Authorize', 'wp-fusion' ),
@@ -175,7 +194,7 @@ class WPF_HighLevel_Admin {
 
 			$new_settings['highlevel_location_id'] = array(
 				'title'          => __( 'Your account location ID', 'wp-fusion' ),
-				'desc'           => __( 'Your account location id which is required for some requests.', 'wp-fusion' ),
+				'desc'           => __( 'Your account location ID which is required for some requests.', 'wp-fusion' ),
 				'type'           => 'text',
 				'section'        => 'setup',
 				'input_disabled' => true,
@@ -263,7 +282,12 @@ class WPF_HighLevel_Admin {
 
 		check_ajax_referer( 'wpf_settings_nonce' );
 
-		$access_token = sanitize_text_field( wp_unslash( $_POST['highlevel_token'] ) );
+		if ( isset( $_POST['highlevel_token'] ) ) {
+			$access_token = sanitize_text_field( wp_unslash( $_POST['highlevel_token'] ) );
+		} else {
+			$access_token = sanitize_text_field( wp_unslash( $_POST['highlevel_api_key'] ) );
+		}
+
 		$location_id  = sanitize_text_field( wp_unslash( $_POST['highlevel_location_id'] ) );
 
 		$connection = $this->crm->connect( $access_token, $location_id, $test = true );
@@ -273,11 +297,16 @@ class WPF_HighLevel_Admin {
 		}
 
 		$options = array(
-			'highlevel_token'       => $access_token,
 			'highlevel_location_id' => $location_id,
 			'crm'                   => $this->slug,
 			'connection_configured' => true,
 		);
+
+		if ( isset( $_POST['highlevel_token'] ) ) {
+			$options['highlevel_token'] = $access_token;
+		} else {
+			$options['highlevel_api_key'] = $access_token;
+		}
 
 		wp_fusion()->settings->set_multiple( $options );
 

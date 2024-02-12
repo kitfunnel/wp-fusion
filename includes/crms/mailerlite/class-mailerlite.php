@@ -55,6 +55,18 @@ class WPF_MailerLite {
 			new WPF_MailerLite_Admin( $this->slug, $this->name, $this );
 		}
 
+		// API URL.
+		if ( $this->is_v2() ) {
+			$this->api_url  = 'https://connect.mailerlite.com/api/';
+			$this->edit_url = 'https://dashboard.mailerlite.com/subscribers/%d';
+		} else {
+			$this->api_url  = 'https://api.mailerlite.com/api/v2/';
+			$this->edit_url = 'https://app.mailerlite.com/subscribers/single/%d';
+		}
+
+		// This has to run before init to be ready for WPF_Auto_Login::start_auto_login().
+		add_filter( 'wpf_auto_login_contact_id', array( $this, 'auto_login_contact_id' ) );
+
 	}
 
 	/**
@@ -73,17 +85,7 @@ class WPF_MailerLite {
 		// Slow down the batch processses to get around API limits.
 		add_filter( 'wpf_batch_sleep_time', array( $this, 'set_sleep_time' ) );
 
-		add_filter( 'wpf_auto_login_contact_id', array( $this, 'auto_login_contact_id' ) );
-
 		add_action( 'wp_head', array( $this, 'tracking_code_output' ) );
-
-		if ( $this->is_v2() ) {
-			$this->api_url  = 'https://connect.mailerlite.com/api/';
-			$this->edit_url = 'https://dashboard.mailerlite.com/subscribers/%d';
-		} else {
-			$this->api_url  = 'https://api.mailerlite.com/api/v2/';
-			$this->edit_url = 'https://app.mailerlite.com/subscribers/single/%d';
-		}
 
 	}
 
@@ -342,7 +344,7 @@ class WPF_MailerLite {
 
 	public function auto_login_contact_id( $contact_id ) {
 
-		if ( is_email( $contact_id ) ) {
+		if ( is_email( urldecode( $contact_id ) ) ) {
 			$contact_id = $this->get_contact_id( urldecode( $contact_id ) );
 		}
 
@@ -651,7 +653,7 @@ class WPF_MailerLite {
 			foreach ( $tags as $tag ) {
 
 				$request          = 'https://api.mailerlite.com/api/v2/groups/' . $tag . '/subscribers';
-				$params           = $this->params;
+				$params           = $this->get_params();
 				$params['method'] = 'POST';
 				$params['body']   = wp_json_encode( array( 'email' => $email ) );
 

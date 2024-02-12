@@ -70,9 +70,9 @@ class WPF_WCS_Gifting extends WPF_Integrations_Base {
 
 				wp_fusion()->user->apply_tags( $settings['apply_tags_recipient'], $recipient_user_id );
 
-				// Maybe remove tags from customer
+				// Maybe remove tags from customer, but only if they don't already have a subscription to this product.
 
-				if ( ! empty( $settings['remove_tags_customer'] ) ) {
+				if ( ! empty( $settings['remove_tags_customer'] ) && ! wcs_user_has_subscription( $subscription->get_user_id(), $product_id, 'active' ) ) {
 
 					wp_fusion()->user->remove_tags( $settings['apply_tags_recipient'], $subscription->get_user_id() );
 

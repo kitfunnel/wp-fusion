@@ -4,15 +4,15 @@
  * Plugin Name: WP Fusion
  * Description: WP Fusion connects your website to your CRM or marketing automation tool, with support for dozens of CRMs and 100+ WordPress plugins.
  * Plugin URI: https://wpfusion.com/
- * Version: 3.41.15
+ * Version: 3.42.8.1
  * Author: Very Good Plugins
  * Author URI: https://verygoodplugins.com/
  * Text Domain: wp-fusion
  *
  * WC requires at least: 3.0
  * WC tested up to: 7.2.0
- * Elementor tested up to: 3.13.0
- * Elementor Pro tested up to: 3.13.0
+ * Elementor tested up to: 3.18.0
+ * Elementor Pro tested up to: 3.18.0
  */
 
 /**
@@ -33,7 +33,7 @@
  * **********************************************************************
  */
 
-define( 'WP_FUSION_VERSION', '3.41.15' );
+define( 'WP_FUSION_VERSION', '3.42.8.1' );
 
 // deny direct access.
 if ( ! function_exists( 'add_action' ) ) {
@@ -220,7 +220,7 @@ final class WP_Fusion {
 				add_action( 'plugins_loaded', array( self::$instance, 'integrations_includes' ), 10 ); // This has to be 10 for Elementor.
 				add_action( 'after_setup_theme', array( self::$instance, 'integrations_includes_theme' ) );
 
-				add_action( 'init', array( self::$instance, 'init' ), 0 );
+				add_action( 'init', array( self::$instance, 'init' ), 6 ); // 6 so it's after WPF_CRM_Base::init().
 
 			}
 
@@ -298,7 +298,7 @@ final class WP_Fusion {
 		}
 
 		if ( ! defined( 'WPF_EDD_ITEM_ID' ) ) {
-			define( 'WPF_EDD_ITEM_ID', '4721' );
+			define( 'WPF_EDD_ITEM_ID', '3678' );
 		}
 
 	}
@@ -373,7 +373,6 @@ final class WP_Fusion {
 				'ultimate-member-1x'            => 'UM_API',
 				'ultimate-member'               => 'UM',
 				'userpro'                       => 'userpro_api',
-				'acf'                           => 'ACF',
 				'acf'                           => 'acf',
 				'learndash'                     => 'SFWD_LMS',
 				'wpep'                          => 'WPEP\Controller',
@@ -444,10 +443,11 @@ final class WP_Fusion {
 				'wppizza'                       => 'WPPIZZA',
 				'users-insights'                => 'USIN_Manager',
 				'e-signature'                   => 'WP_E_Digital_Signature',
-				'fluent-forms'                  => 'FluentForm\Framework\Foundation\Bootstrap',
+				'fluent-forms-v4'               => 'FluentForm\Framework\Foundation\Bootstrap',
+				'fluent-forms'                  => 'FluentForm\App\Http\Controllers\IntegrationManagerController',
 				'toolset-forms'                 => 'CRED_Main',
 				'toolset-types'                 => 'Types_Autoloader',
-				'wp-event-manager'              => 'WP_Event_Manager_Registrations',
+				'wp-event-manager'              => 'WPEM_Registrations',
 				'gravityview'                   => 'GravityView_Plugin',
 				'facetwp'                       => 'FacetWP',
 				'share-logins-pro'              => 'codexpert\Share_Logins_Pro\Plugin',
@@ -514,11 +514,16 @@ final class WP_Fusion {
 				'wp-all-import'                 => 'PMXI_Plugin',
 				'object-sync-for-salesforce'    => 'Object_Sync_Salesforce',
 				'woo-product-options'           => 'Barn2\Plugin\WC_Product_Options\Plugin',
-				'download-manager'           	=> 'WPDM\WordPressDownloadManager',
+				'download-manager'              => 'WPDM\WordPressDownloadManager',
 				'userswp'                       => 'UsersWP',
+				'blockli-streamer'              => 'Blockli_Streamer_Loader',
+				'fluent-booking'                => 'FluentBooking\App\Http\Controllers\IntegrationManagerController',
+				'geodirectory'                  => 'GeoDirectory',
+				'wp-user-manager'               => 'WPUM',
+				'forminator'                    => 'Forminator',
+				'suremembers'                   => 'SureMembers\Admin\Settings_Screen',
 			)
 		);
-
 	}
 
 	/**
@@ -617,6 +622,8 @@ final class WP_Fusion {
 				'engage'           => 'WPF_Engage',
 				'ortto'            => 'WPF_Ortto',
 				'emailoctopus'     => 'WPF_EmailOctopus',
+				'customer-io'      => 'WPF_Customer_IO',
+				'omnisend'         => 'WPF_Omnisend',
 			)
 		);
 
@@ -773,6 +780,8 @@ final class WP_Fusion {
 
 				if ( file_exists( WPF_DIR_PATH . 'includes/integrations/class-' . $filename . '.php' ) ) {
 					require_once WPF_DIR_PATH . 'includes/integrations/class-' . $filename . '.php';
+				} elseif ( file_exists( WPF_DIR_PATH . 'includes/integrations/' . $filename . '/class-' . $filename . '.php' ) ){
+					require_once WPF_DIR_PATH . 'includes/integrations/' . $filename . '/class-' . $filename . '.php';
 				}
 			}
 		}

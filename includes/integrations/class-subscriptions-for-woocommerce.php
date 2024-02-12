@@ -29,7 +29,7 @@ class WPF_Subscriptions_For_WooCommerce extends WPF_Integrations_Base {
 	 * @since 3.40.23
 	 * @var string $docs_url
 	 */
-	public $docs_url = false;
+	public $docs_url = 'https://wpfusion.com/documentation/ecommerce/subscriptions-for-woocommerce/';
 
 	/**
 	 * Gets things started.
@@ -107,7 +107,7 @@ class WPF_Subscriptions_For_WooCommerce extends WPF_Integrations_Base {
 
 		echo '<div class="options_group wps_sfw_product_options">';
 
-		echo '<p class="form-field"><label><strong>' . esc_html__( 'Subscriptions for Woocommerce', 'wp-fusion' ) . '</strong></label></p>';
+		echo '<p class="form-field"><label style="width: 300px;"><strong>' . esc_html__( 'Subscriptions for Woocommerce', 'wp-fusion' ) . '</strong></label></p>';
 
 		echo '<p class="form-field"><label for="wpf-sfw-apply-tags-woo">' . esc_html__( 'Remove tags', 'wp-fusion' ) . '</label>';
 		echo '<input class="checkbox" type="checkbox" id="wpf-sfw-apply-tags-woo" name="wpf-settings-woo[sfw_remove_tags]" value="1" ' . checked( $settings['sfw_remove_tags'], 1, false ) . ' />';

@@ -91,11 +91,12 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 		add_action( 'wpf_woocommerce_async_checkout', array( $this, 'process_order' ), 10 );
 
 		// Refunded / other order statuses.
-		add_action( 'woocommerce_order_status_refunded', array( $this, 'order_status_refunded' ) );
-		add_action( 'woocommerce_order_status_cancelled', array( $this, 'order_status_refunded' ) );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'order_status_changed' ), 10, 4 );
-		add_action( 'woocommerce_new_order', array( $this, 'new_order' ), 10, 3 );
+		add_action( 'woocommerce_new_order', array( $this, 'new_order' ) );
 		add_action( 'woocommerce_order_partially_refunded', array( $this, 'order_partially_refunded' ), 10, 2 );
+		add_action( 'woocommerce_order_fully_refunded', array( $this, 'order_status_refunded' ), 20 ); // 20 so it's after pp_maybe_cancel_subscription_on_full_refund() (Cancel on Refund addon).
+		add_action( 'woocommerce_order_status_processing_to_cancelled', array( $this, 'order_status_refunded' ) );
+		add_action( 'woocommerce_order_status_completed_to_cancelled', array( $this, 'order_status_refunded' ) );
 
 		// Sync auto generated passwords.
 		add_action( 'woocommerce_created_customer', array( $this, 'push_autogen_password' ), 10, 3 );
@@ -190,6 +191,12 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			// Coupon usage.
 			add_action( 'woocommerce_coupon_options_usage_restriction', array( $this, 'coupon_usage_restriction' ), 10, 2 );
 
+		}
+
+		// Compatibility with WooCommerce Software Licenses.
+		if ( class_exists( 'WOO_SL_functions' ) ) {
+			add_filter( 'woo_sl/generate_license_key', array( $this, 'save_license_keys' ), 10, 2 );
+			add_filter( 'wpf_woocommerce_customer_data', array( $this, 'merge_license_key_data' ), 10, 2 );
 		}
 
 		// Compatibility.
@@ -455,6 +462,7 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 		$settings['woo_async'] = array(
 			'title'   => __( 'Asynchronous Checkout', 'wp-fusion' ),
 			'desc'    => __( 'Runs WP Fusion post-checkout actions asynchronously to speed up load times.', 'wp-fusion' ),
+			'tooltip' => __( 'This can improve checkout speed (especially when using abandoned cart tracking and/or enhanced ecommerce) by sending any API calls in a background request rather than as part of the normal checkout process. However, this background request can get cached, or blocked by security plugins, in which case the checkout data simply won\'t be synced (and no error will be recorded). It\'s recommended to only enable this setting if you\'ve noticed your checkout is slower due to WP Fusion.', 'wp-fusion' ),
 			'type'    => 'checkbox',
 			'section' => 'integrations',
 		);
@@ -486,7 +494,14 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			'desc'    => __( 'Display a checkbox on the checkout page where customers can opt-in to receive email marketing.', 'wp-fusion' ),
 			'type'    => 'checkbox',
 			'section' => 'integrations',
-			'unlock'  => array( 'email_optin_message', 'email_optin_default', 'email_optin_tags' ),
+			'unlock'  => array( 'email_optin_message', 'email_optin_default', 'email_optin_tags', 'hide_email_optin' ),
+		);
+
+		$settings['hide_email_optin'] = array(
+			'title'   => __( 'Hide If Consented', 'wp-fusion' ),
+			'desc'    => __( 'Hide the email optin checkbox if the customer has previously opted in.', 'wp-fusion' ),
+			'type'    => 'checkbox',
+			'section' => 'integrations',
 		);
 
 		$settings['email_optin_message'] = array(
@@ -740,6 +755,12 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			'group' => 'woocommerce_order',
 		);
 
+		$meta_fields['order_shipping'] = array(
+			'label' => 'Last Order Shipping Method',
+			'type'  => 'text',
+			'group' => 'woocommerce_order',
+		);
+
 		// Get attributes.
 		$args = array(
 			'posts_per_page' => 100,
@@ -776,6 +797,16 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			}
 		}
 
+		// Support for WooCommerce Software Licenses.
+		if ( class_exists( 'WOO_SL_functions' ) ) {
+
+			$meta_fields['license_key'] = array(
+				'label' => 'License Key',
+				'type'  => 'text',
+				'group' => 'woocommerce_order',
+			);
+		}
+
 		return $meta_fields;
 
 	}
@@ -810,6 +841,7 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			$screen = wc_get_container()->get( CustomOrdersTableController::class )->custom_orders_table_usage_is_enabled()
 			? wc_get_page_screen_id( 'shop-order' )
 			: 'shop_order';
+
 		} else {
 			$screen = 'shop_order';
 		}
@@ -831,11 +863,11 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			return;
 		}
 
-		if ( isset( $_GET['order_action'] ) && 'wpf_process' == $_GET['order_action'] ) {
-			$this->process_order_action( wc_get_order( $post->ID ) );
-		}
-
 		$order = ( $post instanceof WP_Post ) ? wc_get_order( $post->ID ) : $post;
+
+		if ( isset( $_GET['order_action'] ) && 'wpf_process' === $_GET['order_action'] ) {
+			$this->process_order_action( $order );
+		}
 
 		?>
 
@@ -939,7 +971,7 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 	 */
 	public static function add_wp_fusion_column( $columns ) {
 
-		$new_column = '<span class="tips wpf-woo-column-title" data-tip="' . esc_attr__( 'WP Fusion Status', 'wp-fusion' ) . '"><span>WP Fusion Status</span>' . wpf_logo_svg( 14 ) . '</span>';
+		$new_column = '<span class="tips wpf-woo-column-title" data-tip="' . esc_attr__( 'WP Fusion Status', 'wp-fusion' ) . '"><span>' . __( 'WP Fusion Status', 'wp-fusion' ) . '</span>' . wpf_logo_svg( 14 ) . '</span>';
 
 		return wp_fusion()->settings->insert_setting_after( 'shipping_address', $columns, array( 'wp_fusion' => $new_column ) );
 
@@ -1385,7 +1417,6 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 						$data['key']                   = ltrim( $data['key'], '_' ); // works for YITH WooCommerce Checkout Manager custom fields.
 						$customer_data[ $data['key'] ] = $data['value'];
 					}
-
 				}
 			}
 		}
@@ -1482,6 +1513,14 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 		$customer_data['order_id']             = $order->get_order_number();
 		$customer_data['order_notes']          = $order->get_customer_note();
 		$customer_data['order_payment_method'] = $order->get_payment_method_title();
+
+		// Get shipping method.
+
+		$shipping_methods = $order->get_items( 'shipping' );
+
+		if ( $shipping_methods ) {
+			$customer_data['order_shipping_method'] = array_values( $shipping_methods )[0]->get_method_title();
+		}
 
 		// Coupons
 		if ( method_exists( $order, 'get_coupon_codes' ) ) {
@@ -1726,6 +1765,141 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 	}
 
 	/**
+	 * Gets the tags to be applied for an item in an order.
+	 *
+	 * @since 3.41.29
+	 *
+	 * @param WC_Order_Item $item  The item.
+	 * @param WC_Order      $order The order.
+	 * @return array The tags.
+	 */
+	public function get_apply_tags_for_order_item( $item, $order ) {
+
+		$apply_tags = array();
+		$product_id = $item->get_product_id();
+
+		// WooCommerce Global Cart support (for multisite).
+		// @see woogc_woocommerce_cart_loop_start().
+		// @link https://wpglobalcart.com/documentation/loop-though-the-cart-items/.
+		if ( class_exists( 'WOOGC' ) ) {
+			do_action( 'woocommerce/cart_loop/start', $item );
+		}
+
+		$settings = get_post_meta( $product_id, 'wpf-settings-woo', true );
+
+		if ( class_exists( 'WOOGC' ) ) {
+			do_action( 'woocommerce/cart_loop/end', $item );
+		}
+
+		// Apply tags for products
+		if ( ! empty( $settings['apply_tags'] ) ) {
+			$apply_tags = array_merge( $apply_tags, $settings['apply_tags'] );
+		}
+
+		$product = $item->get_product();
+
+		$auto_tagging_prefix = wpf_get_option( 'woo_tagging_prefix', false );
+
+		// Maybe insert the order status
+		$auto_tagging_prefix = str_replace( '[status]', wc_get_order_status_name( $order->get_status() ), $auto_tagging_prefix );
+
+		if ( ! empty( $auto_tagging_prefix ) ) {
+			$auto_tagging_prefix = trim( $auto_tagging_prefix ) . ' ';
+		}
+
+		// Handling for deleted products
+		if ( ! empty( $product ) ) {
+
+			// Apply the tags for variations
+			if ( $product->is_type( 'variation' ) ) {
+
+				if ( isset( $settings['apply_tags_variation'] ) && ! empty( $settings['apply_tags_variation'][ $item['variation_id'] ] ) ) {
+
+					// Old method where variation settings were stored on the product
+					$apply_tags = array_merge( $apply_tags, $settings['apply_tags_variation'][ $item['variation_id'] ] );
+
+				} else {
+
+					$variation_settings = get_post_meta( $item['variation_id'], 'wpf-settings-woo', true );
+
+					if ( is_array( $variation_settings ) && isset( $variation_settings['apply_tags_variation'][ $item['variation_id'] ] ) ) {
+
+						$apply_tags = array_merge( $apply_tags, $variation_settings['apply_tags_variation'][ $item['variation_id'] ] );
+
+					}
+				}
+
+				// For taxonomy tagging we need to exclude attributes
+				$variation_attributes = $product->get_variation_attributes();
+
+			}
+
+			// Auto tagging based on name
+			if ( wpf_get_option( 'woo_name_tagging' ) ) {
+
+				if ( ! in_array( $auto_tagging_prefix . $product->get_title(), $apply_tags ) ) {
+
+					$apply_tags[] = $auto_tagging_prefix . $product->get_title();
+
+				}
+			}
+
+			// Auto tagging based on SKU
+			if ( wpf_get_option( 'woo_sku_tagging' ) && ! empty( $product->get_sku() ) ) {
+
+				if ( ! in_array( $auto_tagging_prefix . $product->get_sku(), $apply_tags ) ) {
+
+					$apply_tags[] = $auto_tagging_prefix . $product->get_sku();
+
+				}
+			}
+		}
+
+		// Term stuff
+		foreach ( get_object_taxonomies( 'product' ) as $product_taxonomy ) {
+
+			$product_terms = get_the_terms( $product_id, $product_taxonomy );
+
+			if ( ! empty( $product_terms ) ) {
+
+				foreach ( $product_terms as $term ) {
+
+					// For taxonomy tagging we need to exclude attributes
+					if ( isset( $variation_attributes ) ) {
+
+						foreach ( $variation_attributes as $key => $value ) {
+
+							$key = str_replace( 'attribute_', '', $key );
+
+							if ( $term->taxonomy == $key && $term->slug != $value ) {
+								continue 2;
+							}
+						}
+					}
+
+					$term_tags = get_term_meta( $term->term_id, 'wpf-settings-woo', true );
+
+					if ( ! empty( $term_tags ) && ! empty( $term_tags['apply_tags'] ) ) {
+
+						$apply_tags = array_merge( $apply_tags, $term_tags['apply_tags'] );
+
+					}
+
+					if ( 'product_cat' == $product_taxonomy && wpf_get_option( 'woo_category_tagging' ) == true ) {
+
+						if ( ! in_array( $auto_tagging_prefix . $term->name, $apply_tags ) ) {
+							$apply_tags[] = $auto_tagging_prefix . $term->name;
+						}
+					}
+				}
+			}
+		}
+
+		return $apply_tags;
+
+	}
+
+	/**
 	 * Async checkout script
 	 *
 	 * @access public
@@ -1743,7 +1917,7 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			);
 
 			// Fallback for cases where it got missed during checkout (for example PayPal).
-			if ( is_order_received_page() ) {
+			if ( is_order_received_page() && isset( $_GET['key'] ) ) {
 
 				$key      = wc_clean( wp_unslash( $_GET['key'] ) );
 				$order_id = wc_get_order_id_by_order_key( $key );
@@ -1914,12 +2088,9 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 				$apply_tags = array_merge( $apply_tags, $global_tags );
 			}
 
-			// Prepare for term stuff
-			$product_taxonomies = get_object_taxonomies( 'product' );
-
 			foreach ( $order->get_items() as $item ) {
 
-				$product_id = $item->get_product_id();
+				$apply_tags = array_merge( $apply_tags, $this->get_apply_tags_for_order_item( $item, $order ) );
 
 				// WooCommerce Global Cart support (for multisite).
 				// @see woogc_woocommerce_cart_loop_start().
@@ -1928,119 +2099,16 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 					do_action( 'woocommerce/cart_loop/start', $item );
 				}
 
-				$settings = get_post_meta( $product_id, 'wpf-settings-woo', true );
+				// Get the settings (for transaction failed tags).
+				$settings = get_post_meta( $item->get_product_id(), 'wpf-settings-woo', true );
 
 				if ( class_exists( 'WOOGC' ) ) {
 					do_action( 'woocommerce/cart_loop/end', $item );
 				}
 
-				// Apply tags for products
-				if ( ! empty( $settings['apply_tags'] ) ) {
-					$apply_tags = array_merge( $apply_tags, $settings['apply_tags'] );
-				}
-
 				// Remove transaction failed tags
 				if ( ! empty( $settings['apply_tags_failed'] ) ) {
 					$remove_tags = array_merge( $remove_tags, $settings['apply_tags_failed'] );
-				}
-
-				$product = $item->get_product();
-
-				$auto_tagging_prefix = wpf_get_option( 'woo_tagging_prefix', false );
-
-				// Maybe insert the order status
-				$auto_tagging_prefix = str_replace( '[status]', wc_get_order_status_name( $status ), $auto_tagging_prefix );
-
-				if ( ! empty( $auto_tagging_prefix ) ) {
-					$auto_tagging_prefix = trim( $auto_tagging_prefix ) . ' ';
-				}
-
-				// Handling for deleted products
-				if ( ! empty( $product ) ) {
-
-					// Apply the tags for variations
-					if ( $product->is_type( 'variation' ) ) {
-
-						if ( isset( $settings['apply_tags_variation'] ) && ! empty( $settings['apply_tags_variation'][ $item['variation_id'] ] ) ) {
-
-							// Old method where variation settings were stored on the product
-							$apply_tags = array_merge( $apply_tags, $settings['apply_tags_variation'][ $item['variation_id'] ] );
-
-						} else {
-
-							$variation_settings = get_post_meta( $item['variation_id'], 'wpf-settings-woo', true );
-
-							if ( is_array( $variation_settings ) && isset( $variation_settings['apply_tags_variation'][ $item['variation_id'] ] ) ) {
-
-								$apply_tags = array_merge( $apply_tags, $variation_settings['apply_tags_variation'][ $item['variation_id'] ] );
-
-							}
-						}
-
-						// For taxonomy tagging we need to exclude attributes
-						$variation_attributes = $product->get_variation_attributes();
-
-					}
-
-					// Auto tagging based on name
-					if ( wpf_get_option( 'woo_name_tagging' ) ) {
-
-						if ( ! in_array( $auto_tagging_prefix . $product->get_title(), $apply_tags ) ) {
-
-							$apply_tags[] = $auto_tagging_prefix . $product->get_title();
-
-						}
-					}
-
-					// Auto tagging based on SKU
-					if ( wpf_get_option( 'woo_sku_tagging' ) && ! empty( $product->get_sku() ) ) {
-
-						if ( ! in_array( $auto_tagging_prefix . $product->get_sku(), $apply_tags ) ) {
-
-							$apply_tags[] = $auto_tagging_prefix . $product->get_sku();
-
-						}
-					}
-				}
-
-				// Term stuff
-				foreach ( $product_taxonomies as $product_taxonomy ) {
-
-					$product_terms = get_the_terms( $product_id, $product_taxonomy );
-
-					if ( ! empty( $product_terms ) ) {
-
-						foreach ( $product_terms as $term ) {
-
-							// For taxonomy tagging we need to exclude attributes
-							if ( isset( $variation_attributes ) ) {
-
-								foreach ( $variation_attributes as $key => $value ) {
-
-									$key = str_replace( 'attribute_', '', $key );
-
-									if ( $term->taxonomy == $key && $term->slug != $value ) {
-										continue 2;
-									}
-								}
-							}
-
-							$term_tags = get_term_meta( $term->term_id, 'wpf-settings-woo', true );
-
-							if ( ! empty( $term_tags ) && ! empty( $term_tags['apply_tags'] ) ) {
-
-								$apply_tags = array_merge( $apply_tags, $term_tags['apply_tags'] );
-
-							}
-
-							if ( 'product_cat' == $product_taxonomy && wpf_get_option( 'woo_category_tagging' ) == true ) {
-
-								if ( ! in_array( $auto_tagging_prefix . $term->name, $apply_tags ) ) {
-									$apply_tags[] = $auto_tagging_prefix . $term->name;
-								}
-							}
-						}
-					}
 				}
 			}
 		}
@@ -2116,7 +2184,13 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			// Run payment complete action.
 			do_action( 'wpf_woocommerce_payment_complete', $order_id, $contact_id );
 
-			$order->add_order_note( 'WP Fusion order actions completed.' );
+			$message = __( 'WP Fusion order actions completed.', 'wp-fusion' );
+
+			if ( isset( $_GET['order_action'] ) && 'wpf_process' === $_GET['order_action'] ) {
+				$message .= ' ' . sprintf( __( 'Order was manually processed by %s.', 'wp-fusion' ), wp_get_current_user()->display_name );
+			}
+
+			$order->add_order_note( $message );
 			$order->save(); // Save the wpf_complete flag.
 
 		}
@@ -2174,7 +2248,6 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 	public function woocommerce_apply_tags_checkout( $order_id ) {
 
 		$order = wc_get_order( $order_id );
-
 		// Prevents the API calls being sent multiple times for the same order.
 
 		if ( $order->get_meta( 'wpf_complete', true ) ) {
@@ -2204,15 +2277,20 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Triggered when an order is refunded / cancelled
+	 * Triggered when an order is refunded / cancelled.
 	 *
-	 * @access public
-	 * @return void
+	 * @since unknown
+	 * @since 3.41.38 Moved from order_status_refunded to order_fully_refunded.
+	 *
+	 * @param WC_Order|int $order The WooCommerce order or order ID.
 	 */
+	public function order_status_refunded( $order ) {
 
-	public function order_status_refunded( $order_id ) {
+		if ( is_numeric( $order ) ) {
+			$order = wc_get_order( $order );
+		}
 
-		$order      = wc_get_order( $order_id );
+		$order_id   = $order->get_id();
 		$user_id    = $order->get_user_id();
 		$contact_id = $this->get_contact_id_from_order( $order );
 
@@ -2223,6 +2301,19 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 		if ( empty( $user_id ) && empty( $contact_id ) ) {
 			wpf_log( 'error', 0, 'Unable to process refund actions for order #' . $order_id . '. No user or contact record found.' );
 			return;
+		}
+
+		// Check to see if the order's parent subscription is still active.
+
+		if ( function_exists( 'wcs_get_subscriptions_for_order' ) ) {
+
+			foreach ( wcs_get_subscriptions_for_order( $order, array( 'order_type' => 'any' ) ) as $subscription ) {
+
+				if ( $subscription->has_status( 'active' ) ) {
+					wpf_log( 'notice', $user_id, 'WooCommerce order <a href="' . admin_url( 'post.php?post=' . $order_id . '&action=edit' ) . '" target="_blank">#' . $order_id . '</a> was refunded, but the parent subscription <a href="' . admin_url( 'post.php?post=' . $subscription->get_id() . '&action=edit' ) . '" target="_blank">#' . $subscription->get_id() . '</a> is still active, so no tags will be modified.' );
+					return;
+				}
+			}
 		}
 
 		wpf_log( 'info', $user_id, 'Processing refund actions for WooCommerce order <a href="' . admin_url( 'post.php?post=' . $order_id . '&action=edit' ) . '" target="_blank">#' . $order_id . '</a>.' );
@@ -2242,11 +2333,12 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			$product_id = $item->get_product_id();
 			$settings   = get_post_meta( $product_id, 'wpf-settings-woo', true );
 
-			if ( ! empty( $settings['apply_tags_refunded'] ) && $order->has_status( 'refunded' ) ) {
+			if ( ! empty( $settings['apply_tags_refunded'] ) && ( $order->has_status( 'refunded' ) || doing_action( 'woocommerce_order_fully_refunded' ) ) ) {
 
 				if ( ! empty( $user_id ) ) {
 					wp_fusion()->user->apply_tags( $settings['apply_tags_refunded'], $user_id );
 				} else {
+					wpf_log( 'info', $user_id, 'Applying refund tags to contact #' . $contact_id, array( 'tag_array' => $settings['apply_tags_refunded'] ) );
 					wp_fusion()->crm->apply_tags( $settings['apply_tags_refunded'], $contact_id );
 				}
 			}
@@ -2258,6 +2350,7 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 				wpf_log( 'notice', $user_id, 'WooCommerce order <a href="' . admin_url( 'post.php?post=' . $order_id . '&action=edit' ) . '" target="_blank">#' . $order_id . '</a> was refunded, but user still has an active subscription to product <strong>' . get_the_title( $product_id ) . '</strong>, so no tags will be removed.' );
 				continue;
 			}
+
 
 			if ( ! empty( $settings['apply_tags'] ) ) {
 				$remove_tags = array_merge( $remove_tags, $settings['apply_tags'] );
@@ -2468,7 +2561,6 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 						$apply_tags = array_merge( $apply_tags, $settings['apply_tags_failed'] );
 					}
 				}
-
 			}
 		}
 
@@ -2522,22 +2614,23 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 	 * @since 3.36.1
 	 * @since 3.37.3 Updated to watch for on-hold orders as well.
 	 *
-	 * @param int      $order_id The order ID.
-	 * @param WC_Order $order    The order object.
+	 * @param int $order_id The order ID.
 	 */
 
-	public function new_order( $order_id, $order = false ) {
+	public function new_order( $order_id ) {
 
-		if ( false === $order ) {
-			$order = wc_get_order( $order_id ); // Some plugins (like Woo Credits) don't pass a second argument to this hook
-		}
-
+		$order  = wc_get_order( $order_id );
 		$status = $order->get_status();
 
-		if ( 'pending' == $status && ! did_action( 'woocommerce_order_status_changed' ) ) {
-			$this->order_status_changed( $order_id, null, 'pending', $order );
-		} elseif ( 'on-hold' == $status && has_action( 'woocommerce_order_status_on-hold', array( $this, 'process_order' ) ) ) {
-			$this->process_order( $order_id ); // For the Bank Transfer payment gateway
+		if ( has_action( 'woocommerce_order_status_' . $status, array( $this, 'process_order' ) ) ) {
+			// For Pending or On Hold orders added via the admin, there's no status change so the
+			// normal transition hooks aren't triggered.
+			$this->process_order( $order_id );
+		}
+
+		// Maybe process a status transition to pending.
+		if ( 'pending' === $status && ! did_action( 'woocommerce_order_status_changed' ) ) {
+			$this->order_status_changed( $order_id, '', 'pending', $order );
 		}
 
 	}
@@ -2575,6 +2668,10 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 
 		if ( ! is_admin() ) {
 			return; // YITH WooCommerce Frontend Manager adds these panels to the frontend, which crashes WPF
+		}
+
+		if ( wpf_get_option( 'admin_permissions' ) && ! current_user_can( 'manage_options' ) ) {
+			return;
 		}
 
 		// Add an nonce field so we can check for it later.
@@ -2672,6 +2769,10 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 
 		if ( ! is_admin() ) {
 			return; // YITH WooCommerce Frontend Manager adds these panels to the frontend, which crashes WPF.
+		}
+
+		if ( wpf_get_option( 'admin_permissions' ) && ! current_user_can( 'manage_options' ) ) {
+			return;
 		}
 
 		echo '<li class="custom_tab wp-fusion-settings-tab hide_if_grouped">';
@@ -2791,12 +2892,12 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 
 			$settings = array();
 
-			if ( isset( $data['allow_tags_variation'] ) && ! empty( array_filter( $data['allow_tags_variation'][ $variation_id ] ) ) ) {
+			if ( isset( $data['allow_tags_variation'] ) && ! empty( array_filter( (array) $data['allow_tags_variation'][ $variation_id ] ) ) ) {
 				$settings['lock_content'] = true;
 				$settings['allow_tags']   = $data['allow_tags_variation'][ $variation_id ];
 			}
 
-			if ( isset( $data['allow_tags_not_variation'] ) && ! empty( array_filter( $data['allow_tags_not_variation'][ $variation_id ] ) ) ) {
+			if ( isset( $data['allow_tags_not_variation'] ) && ! empty( array_filter( (array) $data['allow_tags_not_variation'][ $variation_id ] ) ) ) {
 				$settings['allow_tags_not'] = $data['allow_tags_not_variation'][ $variation_id ];
 			}
 
@@ -2898,6 +2999,8 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 	public function process_order_action( $order ) {
 
 		delete_post_meta( $order->get_id(), 'wpf_ec_complete' ); // This allows Enhanced Ecommerce to run a second time.
+
+		delete_transient( 'wpf_woo_started_' . $order->get_id() ); // unlock the order in case it crashed last time.
 
 		add_filter( 'wpf_prevent_reapply_tags', '__return_false' ); // allow tags to be sent again despite the cache.
 
@@ -3135,6 +3238,7 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 		}
 
 		remove_action( 'woocommerce_add_to_cart', array( $this, 'maybe_apply_coupons' ), 30 ); // don't need to do this twice.
+		remove_action( 'woocommerce_after_cart_item_quantity_update', array( $this, 'maybe_apply_coupons' ) ); // fixes an infinite loop with SUMO Subscriptions.
 
 		WC()->cart->calculate_totals();
 
@@ -3296,6 +3400,25 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 
 		if ( wpf_get_option( 'email_optin' ) ) {
 
+			if ( wpf_get_option( 'hide_email_optin' ) && is_user_logged_in() ) {
+				$orders = wc_get_orders(
+					array(
+						'limit'    => -1,
+						'type'     => 'shop_order',
+						'status'   => $this->get_valid_order_statuses( true ),
+						'customer' => array( get_current_user_id() ),
+					)
+				);
+
+				if ( ! empty( $orders ) ) {
+					foreach ( $orders as $order ) {
+						if ( $order->get_meta( 'email_optin', true ) ) {
+							return;
+						}
+					}
+				}
+			}
+
 			if ( 'unchecked' === wpf_get_option( 'email_optin_default' ) ) {
 				$default = false;
 			} else {
@@ -3351,7 +3474,7 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 			$order = wc_get_order( $order_id );
 
 			if ( ! empty( $_POST['email_optin'] ) ) {
-				$order->update_meta_data( 'email_optin', sanitize_text_field( $_POST['email_optin'] ) );
+				$order->update_meta_data( 'email_optin', date( 'Y-m-d h:i:s' ) );
 			} else {
 				$order->update_meta_data( 'email_optin', false );
 			}
@@ -3489,6 +3612,53 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 
 	}
 
+	// Software Licenses integration.
+
+	/**
+	 * Save License Keys
+	 *
+	 * Syncs license keys to the CRM when a key is generated.
+	 * Keys are generated at checkout, so this happens when an order is placed.
+	 *
+	 * @since 3.42.0
+	 *
+	 * @param string $license_key The license key.
+	 * @param int    $order_id The order ID.
+	 * @return string $license_key
+	 */
+	public function save_license_keys( $license_key, $order_id ) {
+
+		wp_fusion()->user->push_user_meta( wc_get_order( $order_id )->get_customer_id(), array( 'license_key' => $license_key ) );
+
+		return $license_key;
+	}
+
+	/**
+	 * Merge license key data into the customer data array.
+	 *
+	 * @since 3.42.0
+	 *
+	 * @param array    $customer_data The customer data array.
+	 * @param WC_Order $order         The order object.
+	 * @return array $customer_data The customer data
+	 */
+	public function merge_license_key_data( $customer_data, $order ) {
+
+		$order_id     = $order->get_id();
+		$license_data = WOO_SL_functions::get_order_licence_details( $order_id );
+
+		// Get all the license keys in the order.
+		foreach ( $license_data as $id => $data ) {
+			$keys = WOO_SL_functions::get_order_product_generated_keys( $order_id, $data[0]->order_item_id, $data[0]->group_id );
+		}
+
+		if ( ! empty( $keys ) ) {
+			$customer_data['license_key'] = $keys[0]->licence;
+		}
+
+		return $customer_data;
+
+	}
 
 	/**
 	 * Declare support for High Performance Order Storage (HPOS).

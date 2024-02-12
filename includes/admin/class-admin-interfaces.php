@@ -211,10 +211,12 @@ class WPF_Admin_Interfaces {
 		$localize = array(
 			'crm_supports'  => wp_fusion()->crm->supports,
 			'nonce'         => wp_create_nonce( 'wpf_admin_nonce' ),
+			'tag_type'   => wpf_get_option( 'crm_tag_type' ),
 			'connected'  => (bool) wpf_get_option( 'connection_configured' ),
 			'tagSelect4'    => false == apply_filters( 'wpf_disable_tag_select4', false ) ? true : false,
 			'fieldSelect4'  => false == apply_filters( 'wpf_disable_crm_field_select4', false ) ? true : false,
 			'settings_page' => esc_url( admin_url( 'options-general.php?page=wpf-settings' ) ),
+			'reserved_events_keys'=>(isset(wp_fusion()->crm->reserved_events_keys) ? wp_fusion()->crm->reserved_events_keys : ''),
 			'strings'       => array(
 				'addNew'           => __( 'add new', 'wp-fusion' ),
 				'noResults'        => __( 'No results found: click to resynchronize', 'wp-fusion' ),
@@ -222,7 +224,7 @@ class WPF_Admin_Interfaces {
 				'resyncComplete'   => __( 'Resync complete. Please try searching again.', 'wp-fusion' ),
 				'loadingFields'    => __( 'Loading fields, please wait...', 'wp-fusion' ),
 				'linkedTagChanged' => sprintf(
-					__( 'It looks like you\'ve just changed a linked tag. To manually trigger automated enrollments, run a <em>Resync Tags</em> operation from the <a target="_blank" href="%1$s">WP Fusion settings page</a>. Any user with the <strong>%2$s</strong> tag will be enrolled. Any user without the <strong>%2$s</strong> tag will be unenrolled.', 'wp-fusion' ),
+					__( 'It looks like you\'ve just changed a linked tag. To manually trigger automated enrollments, run a <em>Resync tags for every user</em> operation from the <a target="_blank" href="%1$s">WP Fusion settings page</a>. Any user with the <strong>%2$s</strong> tag will be enrolled. Any user without the <strong>%2$s</strong> tag will be unenrolled.', 'wp-fusion' ),
 					esc_url( admin_url( 'options-general.php?page=wpf-settings' ) ) . '#advanced',
 					'TAGNAME'
 				),
@@ -237,7 +239,10 @@ class WPF_Admin_Interfaces {
 				),
 				'error'            => __( 'Error', 'wp-fusion' ),
 				'syncTags'         => __( 'Syncing Tags', 'wp-fusion' ),
+				'applyTags'        => __( 'Apply Tags', 'wp-fusion' ),
+				'linkWithTag'      => __( 'Link with Tag', 'wp-fusion' ),
 				'connecting'       => __( 'Connecting', 'wp-fusion' ),
+				'reserved_keys_warning'=>sprintf(__('%s prevents the "{key_name}" string to be part of the event key.','wp-fusion-event-tracking'),wp_fusion()->crm->name),
 			),
 		);
 

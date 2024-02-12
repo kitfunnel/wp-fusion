@@ -397,7 +397,9 @@ class WPF_API {
 
 			// Existing user.
 
-			wp_fusion()->user->get_contact_id( $user->ID );
+			$user_id = $user->ID;
+
+			wp_fusion()->user->get_contact_id( $user_id );
 
 		} else {
 

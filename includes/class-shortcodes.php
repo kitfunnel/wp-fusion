@@ -56,7 +56,7 @@ class WPF_Shortcodes {
 			'wpf'
 		);
 
-		$atts = array_map( 'sanitize_text_field', $atts );
+		$atts = wpf_shortcode_atts( $atts );
 
 		if ( false !== strpos( $atts['tag'], '“' ) || false !== strpos( $atts['not'], '“' ) ) {
 			return '<pre>' . esc_html__( 'Oops! Curly quotes were found in a shortcode parameter of the [wpf] shortcode. Curly quotes do not work with shortcode attributes.', 'wp-fusion' ) . '</pre>';
@@ -246,7 +246,7 @@ class WPF_Shortcodes {
 			$atts
 		);
 
-		$atts = array_map( 'sanitize_text_field', $atts );
+		$atts = wpf_shortcode_atts( $atts );
 
 		if ( false !== strpos( $atts['field'], '“' ) || false !== strpos( $atts['format'], '“' ) ) {
 			return '<pre>' . esc_html__( 'Oops! Curly quotes were found in a shortcode parameter of the [user_meta] shortcode. Curly quotes do not work with shortcode attributes.', 'wp-fusion' ) . '</pre>';
@@ -439,7 +439,7 @@ class WPF_Shortcodes {
 			'user_meta_if'
 		);
 
-		$atts = array_map( 'sanitize_text_field', $atts );
+		$atts = wpf_shortcode_atts( $atts );
 
 		// Check for curly quotes.
 
@@ -482,12 +482,14 @@ class WPF_Shortcodes {
 		$show_content = false;
 		switch ( $atts['compare'] ) {
 			case '<':
+			case 'less':
 				$show_content = $meta_value < $value;
 				break;
 			case '<=':
 				$show_content = $meta_value <= $value;
 				break;
 			case '>':
+			case 'greater':
 				$show_content = $meta_value > $value;
 				break;
 			case '>=':
@@ -607,7 +609,7 @@ class WPF_Shortcodes {
 			'the_excerpt'
 		);
 
-		$atts = array_map( 'sanitize_text_field', $atts );
+		$atts = wpf_shortcode_atts( $atts );
 
 		if ( ! empty( $atts['length'] ) ) {
 

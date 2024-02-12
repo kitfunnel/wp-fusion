@@ -57,6 +57,9 @@ class WPF_EDD_Recurring extends WPF_Integrations_Base {
 		// Upgrades. 5 so it runs before "handle_subscription_upgrade" in EDD_Recurring_Software_Licensing.
 		add_action( 'edd_recurring_post_create_payment_profiles', array( $this, 'maybe_doing_upgrade' ), 5 );
 
+		// Cancellation survey.
+		add_filter( 'edd_update_payment_meta__edd_cancellation_reason', array( $this, 'sync_cancellation_reason' ), 10, 2 );
+
 		// Meta fields.
 		add_filter( 'wpf_meta_field_groups', array( $this, 'add_meta_field_group' ), 10 );
 		add_filter( 'wpf_meta_fields', array( $this, 'prepare_meta_fields' ), 50 );
@@ -382,6 +385,23 @@ class WPF_EDD_Recurring extends WPF_Integrations_Base {
 
 	}
 
+	/**
+	 * Syncs the EDD cancellation reason.
+	 *
+	 * @since 3.42.1
+	 *
+	 * @param string $meta_value The cancellation reason.
+	 * @param int    $payment_id The payment ID.
+	 */
+	public function sync_cancellation_reason( $meta_value, $payment_id ) {
+
+		$payment = new EDD_Payment( $payment_id );
+
+		wp_fusion()->user->push_user_meta( $payment->user_id, array( '_edd_cancellation_reason' => $meta_value ) );
+
+		return $meta_value;
+
+	}
 
 	/**
 	 * Outputs fields to EDD meta box
@@ -554,6 +574,7 @@ class WPF_EDD_Recurring extends WPF_Integrations_Base {
 				'wpf_settings_edd_crm_fields',
 				$id
 			);
+			echo '<input type="hidden" name="wpf_settings_edd_crm_fields[' . esc_attr( $id ) . '][type]" value="' . esc_attr( $value['type'] ) . '" />';
 			echo '</td>';
 			echo '</tr>';
 		}
@@ -595,6 +616,7 @@ class WPF_EDD_Recurring extends WPF_Integrations_Base {
 			if ( ! empty( $value['crm_field'] ) ) {
 
 				$contact_fields[ $key ]['crm_field'] = $value['crm_field'];
+				$contact_fields[ $key ]['type']      = $value['type'];
 				$contact_fields[ $key ]['active']    = true;
 
 			} elseif ( isset( $contact_fields[ $key ] ) ) {
@@ -784,7 +806,7 @@ class WPF_EDD_Recurring extends WPF_Integrations_Base {
 
 			foreach ( $crm_fields as $crm_key => $crm_value ) {
 
-				if ( false !== strpos( $key, $crm_key . '_' ) ) {
+				if ( 0 === strpos( $key, $crm_key . '_' ) ) {
 
 					$post_id             = str_replace( $crm_key . '_', '', $key );
 					$meta_fields[ $key ] = array(
@@ -795,6 +817,17 @@ class WPF_EDD_Recurring extends WPF_Integrations_Base {
 					);
 				}
 			}
+		}
+
+		if ( class_exists( 'EDD_Cancellation_Survey' ) ) {
+
+			$meta_fields['_edd_cancellation_reason'] = array(
+				'label'  => 'Cancellation Reason',
+				'type'   => 'text',
+				'group'  => 'edd_recurring',
+				'pseudo' => true,
+			);
+
 		}
 
 		return $meta_fields;

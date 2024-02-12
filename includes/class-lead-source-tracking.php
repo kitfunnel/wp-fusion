@@ -29,6 +29,22 @@ class WPF_Lead_Source_Tracking {
 	}
 
 	/**
+	 * Checks if lead source parameters are set and enabled for sync.
+	 *
+	 * @since 3.42.0
+	 *
+	 * @return bool True if enabled, false otherwise.
+	 */
+	public function is_tracking_leadsource() {
+
+		if ( ! empty( $this->merge_lead_source() ) ) {
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+	/**
 	 * Gets the leadsource cookie name.
 	 *
 	 * @since  3.37.3
@@ -138,8 +154,10 @@ class WPF_Lead_Source_Tracking {
 
 	public function merge_lead_source( $user_meta = array() ) {
 
-		// No need to run this when a user registers.
-		remove_filter( 'wpf_api_add_contact_args', array( $this, 'merge_lead_source_guest' ) );
+		if ( doing_action( 'user_register' ) ) {
+			// No need to run this when a user registers.
+			remove_filter( 'wpf_api_add_contact_args', array( $this, 'merge_lead_source_guest' ) );
+		}
 
 		$leadsource_cookie_name = $this->get_leadsource_cookie_name();
 		$ref_cookie_name        = $this->get_referral_cookie_name();
@@ -173,12 +191,14 @@ class WPF_Lead_Source_Tracking {
 
 		}
 
-		if ( isset( $_REQUEST['referrer'] ) ) {
-			$user_meta['current_page'] = esc_url_raw( wp_unslash( $_REQUEST['referrer'] ) );
-		} elseif ( ! empty( $_SERVER['HTTP_REFERER'] ) ) {
-			$user_meta['current_page'] = esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) );
-		} else {
-			$user_meta['current_page'] = esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) );
+		if ( wpf_is_field_active( 'current_page' ) ) {
+			if ( isset( $_REQUEST['referrer'] ) ) {
+				$user_meta['current_page'] = esc_url_raw( wp_unslash( $_REQUEST['referrer'] ) );
+			} elseif ( ! empty( $_SERVER['HTTP_REFERER'] ) ) {
+				$user_meta['current_page'] = esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) );
+			} else {
+				$user_meta['current_page'] = esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) );
+			}
 		}
 
 		return $user_meta;

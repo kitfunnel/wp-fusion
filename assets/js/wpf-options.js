@@ -89,6 +89,18 @@ jQuery(document).ready(function($){
 
 		});
 
+		// Integrations checkboxes.
+
+		$( '.wpf-integration input[type="checkbox"]' ).on( 'change', function() {
+			
+			if ( $(this).is(':checked') ) {
+				$(this).closest('a').addClass('active');
+			} else {
+				$(this).closest('a').removeClass('active');
+			}
+
+		} );
+
 		//
 		// Batch process status checker
 		//
@@ -710,15 +722,37 @@ jQuery(document).ready(function($){
 
 			if ( $(this).val() == 'Picklist' ) {
 
-				$( '#sf_tag_picklist' ).closest( 'tr' ).removeClass( 'disabled' );
+				$( '#wpf_options-sf_tag_picklist' ).closest( 'tr' ).removeClass( 'disabled' );
 
 			} else {
 
-				$( '#sf_tag_picklist' ).closest( 'tr' ).addClass( 'disabled' );
+				$( '#wpf_options-sf_tag_picklist' ).closest( 'tr' ).addClass( 'disabled' );
 
 			}
 
 		});
+
+
+		//
+		// Zoho/Hubspot tags
+		// 
+
+		$('#zoho.crm-config input[type="radio"],#hubspot.crm-config input[type="radio"]').on('change', function() {
+
+			if ( $(this).val() == 'multiselect' ) {
+		
+				$( '#zoho_multiselect_field,#hubspot_multiselect_field' ).closest( 'tr' ).removeClass( 'disabled' );
+				$( '#zoho_multiselect_field,#hubspot_multiselect_field' ).prop( 'disabled', false );
+
+			} else {
+
+				$( '#zoho_multiselect_field,#hubspot_multiselect_field' ).closest( 'tr' ).addClass( 'disabled' );
+				$( '#zoho_multiselect_field,#hubspot_multiselect_field' ).prop( 'disabled', true );
+
+			}
+
+		});
+
 
 		//
 		// Activate / deactivate license

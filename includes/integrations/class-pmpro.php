@@ -43,7 +43,7 @@ class WPF_PMP extends WPF_Integrations_Base {
 	public function init() {
 
 		// Admin settings.
-		add_action( 'pmpro_membership_level_after_other_settings', array( $this, 'membership_level_settings' ) );
+		add_action( 'pmpro_membership_level_before_content_settings', array( $this, 'membership_level_settings' ) );
 		add_action( 'pmpro_save_membership_level', array( $this, 'save_level_settings' ) );
 
 		add_action( 'pmpro_discount_code_after_settings', array( $this, 'discount_code_settings' ) );
@@ -59,6 +59,11 @@ class WPF_PMP extends WPF_Integrations_Base {
 		// Cancel After Next Payment Date addon (v0.4+).
 		if ( function_exists( 'pmproconpd_pmpro_change_level' ) ) {
 			add_filter( 'pmpro_change_level', array( $this, 'change_level' ), 15, 4 ); // 15 so it runs after pmproconpd_pmpro_change_level().
+		}
+
+		// Gift memberships addon.
+		if ( defined( 'PMPROGL_VERSION' ) ) {
+			add_action( 'pmpro_added_order', array( $this, 'after_redeem' ) );
 		}
 
 		// Admin profile edits.
@@ -118,7 +123,9 @@ class WPF_PMP extends WPF_Integrations_Base {
 
 		if ( ! empty( $membership_level ) ) {
 
-			if ( ! is_numeric( $membership_level->startdate ) ) {
+			if ( ! isset( $membership_level->startdate ) ) {
+				$membership_level->startdate = current_time( 'timestamp' ); // sometimes this isn't set yet during signup.
+			} elseif ( ! is_numeric( $membership_level->startdate ) ) {
 				$membership_level->startdate = strtotime( $membership_level->startdate );
 			}
 
@@ -288,12 +295,7 @@ class WPF_PMP extends WPF_Integrations_Base {
 	 * @return  mixed
 	 */
 
-	public function membership_level_settings() {
-
-		$edit = $_GET['edit'];
-		global $wpdb;
-
-		$level = $wpdb->get_row( "SELECT * FROM $wpdb->pmpro_membership_levels WHERE id = '$edit' LIMIT 1", OBJECT );
+	public function membership_level_settings( $level ) {
 
 		$settings = array(
 			'remove_tags'               => 0,
@@ -304,161 +306,189 @@ class WPF_PMP extends WPF_Integrations_Base {
 			'apply_tags_payment_failed' => array(),
 		);
 
-		if ( get_option( 'wpf_pmp_' . $edit ) ) {
-			$settings = array_merge( $settings, get_option( 'wpf_pmp_' . $edit ) );
-		}
+		$settings = wp_parse_args( get_option( 'wpf_pmp_' . $level->id ), $settings );
 
 		?>
 
-		<h3 class="topborder"><?php _e( 'WP Fusion Settings', 'wp-fusion' ); ?></h3>
+		<div id="wp-fusion-settings" class="pmpro_section" data-visibility="shown" data-activated="false">
+			<div class="pmpro_section_toggle">
+				<button class="pmpro_section-toggle-button" type="button" aria-expanded="true">
+					<span class="dashicons dashicons-arrow-up-alt2"></span>
+					<?php _e( 'WP Fusion Settings', 'wp-fusion' ); ?>
+				</button>
+			</div>
+			<div class="pmpro_section_inside">
 
-		<span class="description"><?php printf( __( 'For more information on these settings, %1$ssee our documentation%2$s.', 'wp-fusion' ), '<a href="https://wpfusion.com/documentation/membership/paid-memberships-pro/" target="_blank">', '</a>' ); ?></span>
+				<span class="description"><?php printf( __( 'For more information on these settings, %1$ssee our documentation%2$s.', 'wp-fusion' ), '<a href="https://wpfusion.com/documentation/membership/paid-memberships-pro/" target="_blank">', '</a>' ); ?></span>
 
-		<table class="form-table" id="wp_fusion_tab">
-			<tbody>
-			<tr>
-				<th scope="row" valign="top"><label><?php _e( 'Apply Tags', 'wp-fusion' ); ?>:</label></th>
-				<td>
-					<?php
-					wpf_render_tag_multiselect(
-						array(
-							'setting'   => $settings['apply_tags'],
-							'meta_name' => 'wpf-settings',
-							'field_id'  => 'apply_tags',
-							'no_dupes'  => array( 'tag_link' ),
-						)
-					);
-					?>
-					<br/>
-					<small><?php printf( __( 'These tags will be applied to the customer in %s upon registering for this membership.', 'wp-fusion' ), wp_fusion()->crm->name ); ?></small>
-				</td>
-			</tr>
-			<tr>
-				<th scope="row" valign="top"><label><?php _e( 'Remove Tags', 'wp-fusion' ); ?>:</label></th>
-				<td>
-					<input class="checkbox" type="checkbox" id="wpf-remove-tags" name="wpf-settings[remove_tags]"
-						   value="1" <?php echo checked( $settings['remove_tags'], 1, false ); ?> />
-					<label for="wpf-remove-tags"><?php _e( 'Remove original tags (above) when the membership is cancelled or expires.', 'wp-fusion' ); ?></label>
-				</td>
-			</tr>
-			<tr>
-				<th scope="row" valign="top"><label><?php _e( 'Link with Tag', 'wp-fusion' ); ?>:</label></th>
-				<td>
-					<?php
+				<table class="form-table" id="wp_fusion_tab">
+					<tbody>
+					<tr>
+						<th scope="row" valign="top"><label><?php _e( 'Apply Tags', 'wp-fusion' ); ?>:</label></th>
+						<td>
+							<?php
+							wpf_render_tag_multiselect(
+								array(
+									'setting'   => $settings['apply_tags'],
+									'meta_name' => 'wpf-settings',
+									'field_id'  => 'apply_tags',
+									'no_dupes'  => array( 'tag_link' ),
+								)
+							);
+							?>
+							<br/>
+							<?php if ( 'yes' === get_pmpro_membership_level_meta( $level->id, 'pmprogl_enabled_for_level', true ) ) : ?>
+								<small><?php printf( __( 'These tags will be applied to the purchaser in %s upon purchasing this membership for another user. Tags for the gift recipient can be configured on the associated gift level.', 'wp-fusion' ), wp_fusion()->crm->name ); ?></small>
+						</td>
+					</tr>
+					</tbody>
+				</table>
+			</div>
+							<?php else : ?>
+							<small><?php printf( __( 'These tags will be applied to the customer in %s upon registering for this membership.', 'wp-fusion' ), wp_fusion()->crm->name ); ?></small>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row" valign="top"><label><?php _e( 'Remove Tags', 'wp-fusion' ); ?>:</label></th>
+						<td>
+							<input class="checkbox" type="checkbox" id="wpf-remove-tags" name="wpf-settings[remove_tags]"
+								value="1" <?php echo checked( $settings['remove_tags'], 1, false ); ?> />
+							<label for="wpf-remove-tags"><?php _e( 'Remove original tags (above) when the membership is cancelled or expires.', 'wp-fusion' ); ?></label>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row" valign="top"><label><?php _e( 'Link with Tag', 'wp-fusion' ); ?>:</label></th>
+						<td>
+							<?php
 
-						$args = array(
-							'setting'     => $settings['tag_link'],
-							'meta_name'   => 'wpf-settings',
-							'field_id'    => 'tag_link',
-							'placeholder' => 'Select a Tag',
-							'limit'       => 1,
-							'no_dupes'    => array( 'apply_tags' ),
-						);
+								$args = array(
+									'setting'     => $settings['tag_link'],
+									'meta_name'   => 'wpf-settings',
+									'field_id'    => 'tag_link',
+									'placeholder' => 'Select a Tag',
+									'limit'       => 1,
+									'no_dupes'    => array( 'apply_tags' ),
+								);
 
-						wpf_render_tag_multiselect( $args );
+								wpf_render_tag_multiselect( $args );
 
-						?>
-					<br/>
-					<small><?php printf( __( 'This tag will be applied in %1$s when a member is registered. Likewise, if this tag is applied to a user from within %2$s, they will be automatically enrolled in this membership. If the tag is removed they will be removed from the membership.', 'wp-fusion' ), wp_fusion()->crm->name, wp_fusion()->crm->name ); ?></small>
-				</td>
-			</tr>
-			<tr>
-				<th scope="row" valign="top"><label><?php _e( 'Apply Tags - Cancelled', 'wp-fusion' ); ?>:</label></th>
-				<td>
-					<?php
-					wpf_render_tag_multiselect(
-						array(
-							'setting'   => $settings['apply_tags_cancelled'],
-							'meta_name' => 'wpf-settings',
-							'field_id'  => 'apply_tags_cancelled',
-						)
-					);
-					?>
-					<br/>
-					<small><?php _e( 'Apply these tags when a subscription is cancelled. Happens when an admin or user cancels a subscription, or if the payment gateway has canceled the subscription due to too many failed payments (will be removed if the membership is resumed).', 'wp-fusion' ); ?></small>
-				</td>
-			</tr>
-
-			<?php if ( function_exists( 'pmproconpd_pmpro_change_level' ) ) : ?>
-
-				<tr>
-					<th scope="row" valign="top"><label><?php _e( 'Apply Tags - Pending Cancellation', 'wp-fusion' ); ?>:</label></th>
-					<td>
-						<?php
-						wpf_render_tag_multiselect(
-							array(
-								'setting'   => $settings['apply_tags_pending_cancellation'],
-								'meta_name' => 'wpf-settings',
-								'field_id'  => 'apply_tags_pending_cancellation',
-							)
-						);
-						?>
-						<br/>
-						<small><?php _e( 'Apply these tags when a subscription has been cancelled and there is still time remaining on the membership (via the <em>Cancel on Next Payment Date</em> extension).', 'wp-fusion' ); ?></small>
-					</td>
-				</tr>
-
-
-			<?php endif; ?>
-
-			<tr class="expiration_info" 
-			<?php
-			if ( ! pmpro_isLevelExpiring( $level ) && ! function_exists( 'pmproconpd_pmpro_change_level' ) ) {
-				echo 'style="display: none;"'; // If the Cancel on Next Payment Date addon is active we'll keep this visible so tags can be specified for when the level expires.
-			}
-			?>
-			>
-				<th scope="row" valign="top"><label><?php _e( 'Apply Tags - Expired', 'wp-fusion' ); ?>:</label>
-				</th>
-				<td>
-					<?php
-					wpf_render_tag_multiselect(
-						array(
-							'setting'   => $settings['apply_tags_expired'],
-							'meta_name' => 'wpf-settings',
-							'field_id'  => 'apply_tags_expired',
-						)
-					);
-					?>
-					<br/>
-					<small><?php _e( 'Apply these tags when a membership expires (will be removed if the membership is resumed).', 'wp-fusion' ); ?></small>
+								?>
+							<br/>
+							<small><?php printf( __( 'This tag will be applied in %1$s when a member is registered. Likewise, if this tag is applied to a user from within %2$s, they will be automatically enrolled in this membership. If the tag is removed they will be removed from the membership.', 'wp-fusion' ), wp_fusion()->crm->name, wp_fusion()->crm->name ); ?></small>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row" valign="top"><label><?php _e( 'Apply Tags - Cancelled', 'wp-fusion' ); ?>:</label></th>
+						<td>
+							<?php
+							wpf_render_tag_multiselect(
+								array(
+									'setting'   => $settings['apply_tags_cancelled'],
+									'meta_name' => 'wpf-settings',
+									'field_id'  => 'apply_tags_cancelled',
+								)
+							);
+							?>
+							<br/>
+							<small><?php _e( 'Apply these tags when a subscription is cancelled. Happens when an admin or user cancels a subscription, or if the payment gateway has canceled the subscription due to too many failed payments (will be removed if the membership is resumed).', 'wp-fusion' ); ?></small>
+						</td>
+					</tr>
 
 					<?php if ( function_exists( 'pmproconpd_pmpro_change_level' ) ) : ?>
 
-						<p><small><?php _e( '<strong>Note:</strong> With the <strong>Cancel on Next Payment Date</strong> addon active, no tags will immediately be applied or removed when a member cancels their subscription. Then the tags specified for "Apply Tags - Expired" will be applied when the member\'s access actually expires.', 'wp-fusion' ); ?></small></p>
+						<tr>
+							<th scope="row" valign="top"><label><?php _e( 'Apply Tags - Pending Cancellation', 'wp-fusion' ); ?>:</label></th>
+							<td>
+								<?php
+								wpf_render_tag_multiselect(
+									array(
+										'setting'   => $settings['apply_tags_pending_cancellation'],
+										'meta_name' => 'wpf-settings',
+										'field_id'  => 'apply_tags_pending_cancellation',
+									)
+								);
+								?>
+								<br/>
+								<small><?php _e( 'Apply these tags when a subscription has been cancelled and there is still time remaining on the membership (via the <em>Cancel on Next Payment Date</em> extension).', 'wp-fusion' ); ?></small>
+							</td>
+						</tr>
+
 
 					<?php endif; ?>
 
-				</td>
-			</tr>
-
-			<tr class="recurring_info"
-			<?php
-			if ( ! pmpro_isLevelRecurring( $level ) ) {
-				echo 'style="display: none;"';
-			}
-			?>
-			>
-				<th scope="row" valign="top"><label><?php _e( 'Apply Tags - Payment Failed', 'wp-fusion' ); ?>:</label></th>
-				<td>
+					<tr class="expiration_info" 
 					<?php
-					wpf_render_tag_multiselect(
-						array(
-							'setting'   => $settings['apply_tags_payment_failed'],
-							'meta_name' => 'wpf-settings',
-							'field_id'  => 'apply_tags_payment_failed',
-						)
-					);
+					if ( ! pmpro_isLevelExpiring( $level ) && ! function_exists( 'pmproconpd_pmpro_change_level' ) ) {
+						echo 'style="display: none;"'; // If the Cancel on Next Payment Date addon is active we'll keep this visible so tags can be specified for when the level expires.
+					}
 					?>
-					<br/>
-					<small><?php _e( 'Apply these tags when a recurring payment fails (will be removed if a payment is made).', 'wp-fusion' ); ?></small>
-				</td>
-			</tr>
-			</tbody>
-		</table>
+					>
+						<th scope="row" valign="top"><label><?php _e( 'Apply Tags - Expired', 'wp-fusion' ); ?>:</label>
+						</th>
+						<td>
+							<?php
+							wpf_render_tag_multiselect(
+								array(
+									'setting'   => $settings['apply_tags_expired'],
+									'meta_name' => 'wpf-settings',
+									'field_id'  => 'apply_tags_expired',
+								)
+							);
+							?>
+							<br/>
+							<small><?php _e( 'Apply these tags when a membership expires (will be removed if the membership is resumed).', 'wp-fusion' ); ?></small>
+
+							<?php if ( function_exists( 'pmproconpd_pmpro_change_level' ) ) : ?>
+
+								<p><small><?php _e( '<strong>Note:</strong> With the <strong>Cancel on Next Payment Date</strong> addon active, no tags will immediately be applied or removed when a member cancels their subscription. Then the tags specified for "Apply Tags - Expired" will be applied when the member\'s access actually expires.', 'wp-fusion' ); ?></small></p>
+
+							<?php endif; ?>
+
+						</td>
+					</tr>
+
+					<tr class="recurring_info"
+					<?php
+					if ( ! pmpro_isLevelRecurring( $level ) ) {
+						echo 'style="display: none;"';
+					}
+					?>
+					>
+						<th scope="row" valign="top"><label><?php _e( 'Apply Tags - Payment Failed', 'wp-fusion' ); ?>:</label></th>
+						<td>
+							<?php
+							wpf_render_tag_multiselect(
+								array(
+									'setting'   => $settings['apply_tags_payment_failed'],
+									'meta_name' => 'wpf-settings',
+									'field_id'  => 'apply_tags_payment_failed',
+								)
+							);
+							?>
+							<br/>
+							<small><?php _e( 'Apply these tags when a recurring payment fails (will be removed if a payment is made).', 'wp-fusion' ); ?></small>
+						</td>
+					</tr>
+					</tbody>
+				</table>
+
+				<?php
+				/**
+				 * Allow adding form fields after the Other Settings section.
+				 *
+				 * @since 3.41.33
+				 *
+				 * @param object $level The Membership Level object.
+				 */
+				do_action( 'pmpro_membership_level_after_wp_fusion_settings', $level );
+				?>
+			</div> <!-- end pmpro_section_inside -->
+								<?php
+								endif;
+							?>
+		</div> <!-- end wp-fusion-settings -->
 
 		<?php
-
 	}
 
 	/**
@@ -672,10 +702,14 @@ class WPF_PMP extends WPF_Integrations_Base {
 
 
 	/**
-	 * Triggered when a user's membership level is changed. Syncs metadata and applies tags for the new level
+	 * After Change Membership LEvel
+	 * Triggered when a user's membership level is changed. Syncs metadata and applies tags for the new level.
 	 *
-	 * @access  public
-	 * @return  void
+	 * @since unknown
+	 * @since 3.42.3 Added support for gifts.
+	 *
+	 * @param int $level_id The new level.
+	 * @param int $user_id  The user ID.
 	 */
 	public function after_change_membership_level( $level_id, $user_id ) {
 
@@ -687,13 +721,19 @@ class WPF_PMP extends WPF_Integrations_Base {
 			return;
 		}
 
+		if ( 'yes' === get_pmpro_membership_level_meta( $level_id, 'pmprogl_enabled_for_level', true ) ) {
+
+			// Level is enabled for gifting. Apply "Apply Tags" but don't sync any fields.
+			$this->apply_membership_level_tags( $user_id, $level_id );
+			return;
+
+		}
+
 		// Get new level.
-		$membership_level = pmpro_getMembershipLevelForUser( $user_id );
+		$membership_level = pmpro_getLevel( $level_id );
 
 		if ( ! empty( $membership_level ) ) {
-
 			wpf_log( 'info', $user_id, 'User joined Paid Memberships Pro level <a href="' . admin_url( 'admin.php?page=pmpro-membershiplevels&edit=' . $level_id ) . '">' . $membership_level->name . '</a>.' );
-
 		}
 
 		if ( ! doing_action( 'personal_options_update' ) && ! doing_action( 'edit_user_profile_update' ) ) {
@@ -708,7 +748,29 @@ class WPF_PMP extends WPF_Integrations_Base {
 		if ( ! empty( $membership_level ) ) {
 			$this->apply_membership_level_tags( $user_id, $membership_level->id );
 		}
+	}
 
+	/**
+	 * After Redeem.
+	 *
+	 * Sync user fields to CRM when a gift membership is redeemed.
+	 *
+	 * @since 3.42.6
+	 *
+	 * @param object $order The order object.
+	 */
+	public function after_redeem( $order ) {
+
+		if ( did_action( 'after_change_membership_level' ) ) {
+			return; // This is a regular checkout, not a gift.
+		}
+
+		$membership_level = $order->getMembershipLevel();
+
+		if ( isset( $membership_level->startdate ) ) {
+			// The gift buyer doesn't have a start date.
+			$this->sync_membership_level_fields( $order->user_id, $membership_level );
+		}
 	}
 
 	/**
@@ -898,10 +960,6 @@ class WPF_PMP extends WPF_Integrations_Base {
 
 			if ( in_array( $tag_id, $user_tags ) && pmpro_hasMembershipLevel( $level_id, $user_id ) == false ) {
 
-				// Prevent looping
-				remove_action( 'pmpro_before_change_membership_level', array( $this, 'before_change_membership_level' ), 10, 4 );
-				remove_action( 'pmpro_after_change_membership_level', array( $this, 'after_change_membership_level' ), 10, 2 );
-
 				$pmpro_level = pmpro_getLevel( $level_id );
 
 				$startdate = current_time( 'mysql' );
@@ -962,7 +1020,7 @@ class WPF_PMP extends WPF_Integrations_Base {
 			global $wpdb;
 			$membership_level = pmpro_getMembershipLevelForUser( $user_id );
 
-			if ( ! empty( $user_meta['pmpro_start_date'] ) ) {
+			if ( ! empty( $user_meta['pmpro_start_date'] ) && $membership_level ) {
 
 				$start_date = strtotime( $user_meta['pmpro_start_date'] );
 
@@ -983,7 +1041,7 @@ class WPF_PMP extends WPF_Integrations_Base {
 				}
 			}
 
-			if ( ! empty( $user_meta['pmpro_expiration_date'] ) ) {
+			if ( ! empty( $user_meta['pmpro_expiration_date'] ) && $membership_level ) {
 
 				$expiration_date = strtotime( $user_meta['pmpro_expiration_date'] );
 

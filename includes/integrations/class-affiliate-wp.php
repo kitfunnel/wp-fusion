@@ -1,5 +1,7 @@
 <?php
 
+use function Breakdance\String\lower;
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Exit if accessed directly.
 }
@@ -32,16 +34,14 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 	public $docs_url = 'https://wpfusion.com/documentation/affiliates/affiliate-wp/';
 
 	/**
-	 * Gets things started
+	 * Init
+	 * Gets things started.
 	 *
-	 * @access  public
 	 * @since   1.0
-	 * @return  void
 	 */
-
 	public function init() {
 
-		// Settings fields
+		// Settings fields.
 		add_filter( 'wpf_configure_settings', array( $this, 'register_settings' ), 15, 2 );
 		add_action( 'affwp_edit_affiliate_end', array( $this, 'edit_affiliate' ) );
 		add_action( 'affwp_pre_update_affiliate', array( $this, 'save_edit_affiliate' ), 10, 3 );
@@ -51,17 +51,20 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 
 		add_action( 'affwp_insert_affiliate', array( $this, 'add_affiliate' ), 15 );
 		add_action( 'affwp_update_affiliate', array( $this, 'update_affiliate' ), 5 );
-		add_action( 'affwp_set_affiliate_status', array( $this, 'affiliate_approved' ), 10, 3 );
-		add_action( 'affwp_set_affiliate_status', array( $this, 'affiliate_rejected' ), 10, 3 );
+		add_action( 'affwp_affiliate_deleted', array( $this, 'affiliate_deleted' ), 10, 3 );
+		add_action( 'affwp_set_affiliate_status', array( $this, 'affiliate_status_updated' ), 10, 3 );
 
-		// Accepted referrals
+		// Accepted referrals.
 		add_action( 'affwp_referral_accepted', array( $this, 'referral_accepted' ), 10, 2 );
 		add_action( 'wpf_fluent_forms_post_submission', array( $this, 'maybe_handle_fluent_forms_referral' ), 10, 5 );
 
 		add_filter( 'wpf_get_user_meta', array( $this, 'get_user_meta' ), 10, 2 );
 		add_filter( 'wpf_user_register', array( $this, 'user_register' ), 10, 2 );
 
-		// Batch operations
+		// Tag linking.
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
+
+		// Batch operations.
 		add_filter( 'wpf_export_options', array( $this, 'export_options' ) );
 		add_action( 'wpf_batch_affiliatewp_init', array( $this, 'batch_init_affiliates' ) );
 		add_action( 'wpf_batch_affiliatewp', array( $this, 'batch_step_affiliates' ) );
@@ -70,12 +73,13 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 
 
 	/**
-	 * Registers additional AWP settings
+	 * Register Settings
+	 * Registers additional AWP settings.
 	 *
-	 * @access  public
-	 * @return  array Settings
+	 * @param  array $settings The settings.
+	 * @param  array $options The options.
+	 * @return array Settings
 	 */
-
 	public function register_settings( $settings, $options ) {
 
 		$settings['awp_header'] = array(
@@ -85,24 +89,8 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 		);
 
 		$settings['awp_apply_tags'] = array(
-			'title'   => __( 'Apply Tags - Affiliate Registration', 'wp-fusion' ),
+			'title'   => __( 'Apply Tags - Registration', 'wp-fusion' ),
 			'desc'    => __( 'Apply these tags to new affiliates registered through AffiliateWP.', 'wp-fusion' ),
-			'std'     => array(),
-			'type'    => 'assign_tags',
-			'section' => 'integrations',
-		);
-
-		$settings['awp_apply_tags_approved'] = array(
-			'title'   => __( 'Apply Tags - Affilate Approval', 'wp-fusion' ),
-			'desc'    => __( 'Apply these tags when affiliates are approved.', 'wp-fusion' ),
-			'std'     => array(),
-			'type'    => 'assign_tags',
-			'section' => 'integrations',
-		);
-
-		$settings['awp_apply_tags_rejected'] = array(
-			'title'   => __( 'Apply Tags - Affilate Rejected', 'wp-fusion' ),
-			'desc'    => __( 'Apply these tags when affiliates are rejected.', 'wp-fusion' ),
 			'std'     => array(),
 			'type'    => 'assign_tags',
 			'section' => 'integrations',
@@ -128,8 +116,64 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 
 		}
 
-		return $settings;
+		// Statuses.
 
+		foreach ( affwp_get_affiliate_statuses() as $slug => $label ) {
+
+			$settings[ "awp_apply_tags_{$slug}" ] = array(
+				'title'   => sprintf( __( 'Apply Tags - %s', 'wp-fusion' ), $label ),
+				'desc'    => sprintf( __( 'Apply these tags when an afffiliate\'s status is set to %s.', 'wp-fusion' ), strtolower( $label ) ),
+				'type'    => 'assign_tags',
+				'section' => 'integrations',
+			);
+
+		}
+
+		$settings['awp_apply_tags_deleted'] = array(
+			'title'   => __( 'Apply Tags - Deleted', 'wp-fusion' ),
+			'desc'    => __( 'Apply these tags when affiliates are deleted.', 'wp-fusion' ),
+			'std'     => array(),
+			'type'    => 'assign_tags',
+			'section' => 'integrations',
+		);
+
+		// Linked tags
+
+		$settings['awp_tag_activate_link'] = array(
+			'title'   => __( 'Link Tag - Affilate Activation', 'wp-fusion' ),
+			'desc'    => __( 'When this tag is applied, an affiliate account will be created for the user and activated. If the tag is removed, the affiliate account will be deactivated.', 'wp-fusion' ),
+			'std'     => array(),
+			'type'    => 'assign_tags',
+			'section' => 'integrations',
+			'limit'   => 1,
+		);
+
+		// Affiliate Groups Tag Linking.
+
+		if ( class_exists( '\AffiliateWP\Groups\Group' ) && class_exists( '\AffiliateWP\Groups\DB' ) ) {
+
+			$affwp  = new AffiliateWP\Groups\DB();
+			$groups = $affwp->get_groups();
+
+			$affwp = new AffiliateWP\Groups\DB();
+
+			$groups = $affwp->get_groups();
+
+			foreach ( $groups as $group_id ) {
+
+				$settings[ 'awp_group_tag_' . $group_id ] = array(
+					'title'   => __( 'Link Tag - Group: ' . $affwp->get_group_title( $group_id ), 'wp-fusion' ),
+					'desc'    => 'Add affiliates with this tag to the <strong>' . $affwp->get_group_title( $group_id ) . '</strong> group. Also adds the tag to affiliates who join the group.',
+					'std'     => array(),
+					'type'    => 'assign_tags',
+					'section' => 'integrations',
+					'limit'   => 1,
+				);
+
+			}
+		}
+
+		return $settings;
 	}
 
 	/**
@@ -184,12 +228,16 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 
 
 	/**
-	 * Save Edit Affiliate screen
+	 * Save Edit Affiliate
+	 * Saves WP Fusion settings on the Edit Affiliate screen.
+	 * Also applies tags to the affiliate if they're added to a group and the group has a linked tag.
 	 *
-	 * @access public
-	 * @return void
+	 * @since 3.41.29 Added support for Affiliate Groups.
+	 *
+	 * @param object $affiliate The affiliate.
+	 * @param array  $args The affiliate args.
+	 * @param array  $data The saved data.
 	 */
-
 	public function save_edit_affiliate( $affiliate, $args, $data ) {
 
 		if ( ! empty( $data['apply_tags_customers'] ) ) {
@@ -201,6 +249,290 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 			affwp_delete_affiliate_meta( $affiliate->affiliate_id, 'apply_tags_customers' );
 
 		}
+
+		if ( class_exists( '\AffiliateWP\Groups\Group' ) && class_exists( '\AffiliateWP\Groups\DB' ) ) {
+
+			$affwp = new AffiliateWP\Groups\DB();
+
+			$link_tag  = array();
+			$user_tags = wpf_get_tags( $args['user_id'] );
+
+			// We only need to check the first key since affiliates can only have one group.
+			if ( isset( $data['affiliate-groups_items'] ) && 'none' !== $data['affiliate-groups_items'][0] ) {
+
+				foreach ( $data['affiliate-groups_items'] as $key => $group_id ) {
+
+					$settings = wpf_get_option( 'awp_group_tag_' . $group_id );
+
+					// If a link tag is set and the user has the tag.
+					// We update the affiliate meta for consistancy with other WP Fusion integration.
+					if ( $settings && ! array_intersect( $settings, $user_tags ) ) {
+
+						$link_tag = array_merge( $link_tag, $settings );
+
+						wpf_log( 'info', $args['user_id'], 'Affiliate was added to AffiliateWP group <a href="' . admin_url( 'admin.php?page=affiliate-wp-affiliate-groups&action=edit&group_id=' . $group_id ) . '" target="_blank">' . $affwp->get_group_title( $group_id ) . '</a>. Applying tags.' );
+						affwp_update_affiliate_meta( $affiliate->affiliate_id, 'tag_link_' . $group_id, $link_tag );
+
+						wp_fusion()->user->apply_tags( $link_tag, $args['user_id'] );
+
+					} else {
+
+						affwp_delete_affiliate_meta( $affiliate->affiliate_id, 'tag_link_' . $group_id );
+
+					}
+				}
+			} else {
+				// If the user isn't in a group, we need to check if the affiliate has a linked tag.
+				foreach ( $affwp->get_groups() as $group_id ) {
+
+					$settings = wpf_get_option( 'awp_group_tag_' . $group_id );
+
+					if ( $settings && array_intersect( $settings, $user_tags ) ) {
+
+						$link_tag = array_merge( $link_tag, $settings );
+
+						wpf_log( 'info', $args['user_id'], 'Affiliate was removed from AffiliateWP group <a href="' . admin_url( 'admin.php?page=affiliate-wp-affiliate-groups&action=edit&group_id=' . $group_id ) . '" target="_blank">' . $affwp->get_group_title( $group_id ) . '</a>. Removing tags.' );
+						affwp_delete_affiliate_meta( $affiliate->affiliate_id, 'tag_link_' . $group_id );
+
+						wp_fusion()->user->remove_tags( $link_tag, $args['user_id'] );
+
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Tags Modified.
+	 *
+	 * Manages an affiliates group access based on linked tags.
+	 *
+	 * @since 3.41.29
+	 * @since 3.41.42 Added link tags.
+	 *
+	 * @param int   $user_id The user ID.
+	 * @param array $user_tags The user tags.
+	 */
+	public function tags_modified( $user_id, $user_tags ) {
+
+		if ( ! class_exists( '\AffiliateWP\Groups\Group' ) ) {
+			return; // only works in AffiliateWP 2.13.0+.
+		}
+
+		$affwp = new AffiliateWP\Groups\DB();
+		$awpdb = new AffiliateWP\Connections\DB();
+
+		// Group Tag Linking.
+
+		$groups       = $affwp->get_groups();
+		$affiliate_id = affwp_get_affiliate_id( $user_id );
+
+		// We check all the groups to see if the affiliate has a linked tag.
+		foreach ( $groups as $group_id ) {
+
+			$settings = wpf_get_option( 'awp_group_tag_' . $group_id );
+
+			// If the affiliate doesn't exist but they have a linked tag, add them.
+			if ( ! $affiliate_id && $settings && array_intersect( $settings, $user_tags ) ) {
+				$affiliate_id = affwp_add_affiliate(
+					array(
+						'user_id' => $user_id,
+					)
+				);
+			} elseif ( ! $affiliate_id ) {
+				continue;
+			}
+
+			// If the affiliate has a linked tag and isn't in the group, we add them.
+			if ( ! empty( $settings ) && array_intersect( $settings, $user_tags ) && 0 === affwp_get_affiliate_group_id( $affiliate_id ) ) {
+
+				wpf_log( 'info', $user_id, 'Affiliate has a link tag for AffiliateWP group <a href="' . admin_url( 'admin.php?page=affiliate-wp-affiliate-groups&action=edit&group_id=' . $group_id ) . '" target="_blank">' . $affwp->get_group_title( $group_id ) . '</a>. Adding to group.' );
+
+				/**
+				 * Register the connectable.
+				 * This is required for the connect() method to work.
+				 * We need to use the connect() method in class-connections-db.php because
+				 * AffiliateWP doesn't have a function to add an affiliate to a group.
+				 *
+				 * @param array $args The array of arguments to register the connectable.
+				 */
+				$args = array(
+					'name'   => 'group',
+					'table'  => 'wp_affiliate_wp_connections',
+					'column' => 'group',
+				);
+				$awpdb->register_connectable( $args );
+
+				$args = array(
+					'name'   => 'affiliate',
+					'table'  => 'wp_affiliate_wp_connections',
+					'column' => 'affiliate',
+				);
+				$awpdb->register_connectable( $args );
+
+				$args = array(
+					'group'     => $group_id,
+					'affiliate' => $affiliate_id,
+				);
+
+				// Connect the affiliate to the group in the database.
+				// This adds them to the group.
+				$awpdb->connect( $args );
+			}
+
+			// If the affiliate has a linked tag and is not in the group, we remove them.
+			if ( ! empty( $settings ) && ! array_intersect( $settings, $user_tags ) && affwp_get_affiliate_group_id( $affiliate_id ) === $group_id ) {
+
+				wpf_log( 'info', $user_id, 'Affiliate is missing link tag for AffiliateWP group <a href="' . admin_url( 'admin.php?page=affiliate-wp-affiliate-groups&action=edit&group_id=' . $group_id ) . '" target="_blank">' . $affwp->get_group_title( $group_id ) . '</a>. Removing from group.' );
+
+				// Get the connection ID.
+				// 'fields' => 'ids' returns the connection ids that are set in the database.
+				$args = array(
+					'fields' => 'ids',
+				);
+
+				$connection_ids = $awpdb->get_connections( $args );
+
+				// If a connection for this affiliate exists, we delete it.
+				// This removes them from the group.
+				foreach ( $connection_ids as $connection_id ) {
+
+					$connection = $awpdb->get_connected_ids( $connection_id );
+
+					if ( $affiliate_id == $connection['affiliate'] ) {
+
+						$awpdb->delete_connection( $connection_id );
+
+					}
+				}
+			}
+		}
+
+		// Linked Tags.
+
+		$linked_tag = wpf_get_option( 'awp_tag_activate_link', array() );
+
+		if ( ! empty( $linked_tag ) ) {
+
+			$linked_tag = $linked_tag[0];
+
+			if ( in_array( $linked_tag, $user_tags ) && false === $affiliate_id ) {
+
+				// Create new affiliate.
+
+				wpf_log(
+					'info',
+					$user_id,
+					'User granted affiliate account by linked tag <strong>' . wpf_get_tag_label( $linked_tag ) . '</strong>.'
+				);
+
+				affwp_add_affiliate(
+					array(
+						'user_id' => $user_id,
+						'status'  => 'active',
+					)
+				);
+
+			} elseif ( in_array( $linked_tag, $user_tags ) && 'active' !== affwp_get_affiliate_status( $affiliate_id ) ) {
+
+				// Existing inactive affiliate, activate them.
+
+				wpf_log(
+					'info',
+					$user_id,
+					'Affiliate activated by linked tag <strong>' . wpf_get_tag_label( $linked_tag ) . '</strong>.'
+				);
+
+				affwp_set_affiliate_status( $affiliate_id, 'active' );
+
+			} elseif ( ! in_array( $linked_tag, $user_tags ) && 'active' === affwp_get_affiliate_status( $affiliate_id ) ) {
+
+				// Tag is missing and affiliate is active, deactivate them.
+
+				wpf_log(
+					'info',
+					$user_id,
+					'Affiliate deactivated by linked tag <strong>' . wpf_get_tag_label( $linked_tag ) . '</strong>.'
+				);
+
+				affwp_set_affiliate_status( $affiliate_id, 'inactive' );
+
+			}
+
+		}
+
+	}
+
+
+	/**
+	 * Affiliate Deleted.
+	 *
+	 * Applies specified tags when an affiliate is deleted.
+	 *
+	 * @since 3.41.42
+	 *
+	 * @param int    $affiliate_id The affiliate ID.
+	 * @param array  $data The affiliate delete data.
+	 * @param object $affiliate The affiliate object.
+	 */
+	public function affiliate_deleted( $affiliate_id, $data, $affiliate ) {
+
+		$this->affiliate_status_updated( $affiliate_id, 'deleted' );
+
+	}
+
+	/**
+	 * Affiliate Status Updated.
+	 *
+	 * Applies specified tags when the affiliate is deactivated or activated.
+	 *
+	 * @since 3.41.30
+	 * @since 3.41.42 Added linked tags.
+	 *
+	 * @param int    $affiliate_id The affiliate ID.
+	 * @param string $status       The affiliate status.
+	 * @param string $old_status   The old affiliate status.
+	 */
+	public function affiliate_status_updated( $affiliate_id = 0, $status = '', $old_status = '' ) {
+
+		// If the affiliate ID is invalid or if the affiliate status hasn't changed, do nothing.
+		if ( empty( $affiliate_id ) || $status === $old_status ) {
+			return;
+		}
+
+		$user_id = affwp_get_affiliate_user_id( $affiliate_id );
+
+		// Sync the data.
+		wp_fusion()->user->push_user_meta( $user_id, array( 'awp_affiliate_status' => $status ) );
+
+		remove_action( 'wpf_tags_modified', array( $this, 'tags_modified' ) );
+
+		if ( ! doing_action( 'wpf_tags_modified' ) ) {
+
+			// Possibly apply or remove Linked Tag. Only it it wasn't just modified.
+
+			$linked_tag = wpf_get_option( 'awp_tag_activate_link' );
+
+			if ( ! empty( $linked_tag ) ) {
+
+				if ( 'active' === $status ) {
+					wp_fusion()->user->apply_tags( $linked_tag, $user_id );
+				} elseif ( 'inactive' === $status || 'rejected' === $status || 'deleted' === $status ) {
+					wp_fusion()->user->remove_tags( $linked_tag, $user_id );
+				}
+
+			}
+		}
+
+		// Apply tags for the status.
+
+		$apply_tags = wpf_get_option( "awp_apply_tags_{$status}" );
+
+		if ( ! empty( $apply_tags ) ) {
+			wp_fusion()->user->apply_tags( $apply_tags, $user_id );
+		}
+
+		add_action( 'wpf_tags_modified', array( $this, 'tag_modified' ), 10, 2 );
 
 	}
 
@@ -238,6 +570,13 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 		// Affiliate
 		$meta_fields['awp_affiliate_id'] = array(
 			'label'  => 'Affiliate\'s Affiliate ID',
+			'type'   => 'text',
+			'group'  => 'awp',
+			'pseudo' => true,
+		);
+
+		$meta_fields['awp_affiliate_status'] = array(
+			'label'  => 'Affiliate\'s Status',
 			'type'   => 'text',
 			'group'  => 'awp',
 			'pseudo' => true,
@@ -392,11 +731,12 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 		$user = get_userdata( $affiliate->user_id );
 
 		$affiliate_data = array(
-			'awp_affiliate_id'  => $affiliate_id,
-			'awp_referral_rate' => $rate,
-			'awp_payment_email' => $affiliate->payment_email,
-			'first_name'        => $user->first_name,
-			'last_name'         => $user->last_name,
+			'first_name'           => $user->first_name,
+			'last_name'            => $user->last_name,
+			'awp_affiliate_id'     => $affiliate_id,
+			'awp_referral_rate'    => $rate,
+			'awp_payment_email'    => $affiliate->payment_email,
+			'awp_affiliate_status' => $affiliate->status,
 		);
 
 		// Custom meta
@@ -500,6 +840,7 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 			'awp_affiliate_id'  => $data['affiliate_id'],
 			'awp_referral_rate' => $data['rate'],
 			'awp_payment_email' => $data['payment_email'],
+			'awp_affiliate_status' => $affiliate->status,
 		);
 
 		// Groups.
@@ -609,7 +950,7 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 			wpf_log( 'info', wpf_get_current_user_id(), 'AffiliateWP referral detected but unable to sync referrer data since referral context <code>' . $referral->context . '</code> is not currently supported.' );
 
 		}
-		
+
 		// If we've found a user or contact for the referral, update their record and apply tags
 		if ( ! empty( $user_id ) ) {
 
@@ -621,7 +962,7 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 		} elseif ( ! empty( $contact_id ) ) {
 
 			wpf_log( 'info', wpf_get_current_user_id(), 'Syncing AffiliateWP referrer meta:', array( 'meta_array' => $referrer_data ) );
-			
+
 			wp_fusion()->crm->update_contact( $contact_id, $referrer_data );
 
 			if ( ! empty( $apply_tags ) ) {
@@ -695,86 +1036,24 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 		}
 	}
 
-	/**
-	 * Apply tags when affiliate is rejected.
-	 *
-	 * @param integer $affiliate_id
-	 * @param string  $status
-	 * @param string  $old_status
-	 * @return void
-	 */
-	public function affiliate_rejected( $affiliate_id = 0, $status = '', $old_status = '' ) {
-
-		if ( empty( $affiliate_id ) || 'rejected' !== $status ) {
-			return;
-		}
-
-		$user_id = affwp_get_affiliate_user_id( $affiliate_id );
-
-		$apply_tags = wpf_get_option( 'awp_apply_tags_rejected' );
-
-		if ( ! empty( $apply_tags ) ) {
-
-			wp_fusion()->user->apply_tags( $apply_tags, $user_id );
-
-		}
-	}
-
 
 	/**
-	 * Apply tags when affiliate approved
+	 * Add Affiliate.
 	 *
-	 * @access  public
-	 * @return  void
-	 */
-
-	public function affiliate_approved( $affiliate_id = 0, $status = '', $old_status = '' ) {
-
-		if ( empty( $affiliate_id ) || 'active' !== $status ) {
-			return;
-		}
-
-		/*
-		 * Skip applying the tags for a now-'active' affiliate under
-		 * certain conditions:
-		 *
-		 * 1. The affiliate was previously of 'inactive' or 'rejected' status.
-		 * 2. The affiliate was previously of 'pending' status, where the status
-		 *    transition wasn't triggered by a registration.
-		 * 3. The affiliate's 'active' status didn't change, and the status
-		 *    "transition" wasn't triggered by a registration, i.e. the affiliate
-		 *    was updated in a bulk action and the 'active' status didn't change.
-		 */
-		if ( ! in_array( $old_status, array( 'active', 'pending' ), true ) && ! did_action( 'affwp_affiliate_register' ) ) {
-			return;
-		}
-
-		$user_id    = affwp_get_affiliate_user_id( $affiliate_id );
-		$apply_tags = wpf_get_option( 'awp_apply_tags_approved' );
-
-		if ( ! empty( $apply_tags ) ) {
-
-			wp_fusion()->user->apply_tags( $apply_tags, $user_id );
-
-		}
-	}
-
-	/**
-	 * Triggered when affiliate added
+	 * Triggered when an affiliate is added and applies apply tags and link tags.
 	 *
-	 * @access  public
-	 * @return  void
+	 * @since 3.41.42 Added link tags.
+	 *
+	 * @param int $affiliate_id The affiliate ID.
 	 */
-
 	public function add_affiliate( $affiliate_id ) {
 
-		$affiliate = affwp_get_affiliate( $affiliate_id );
-
+		$affiliate      = affwp_get_affiliate( $affiliate_id );
 		$affiliate_data = $this->get_affiliate_meta( $affiliate_id );
 
 		if ( ! wp_fusion()->user->has_contact_id( $affiliate->user_id ) ) {
 
-			// This is necessary so the data gets sent when Auto Register Affiliates is enabled
+			// This is necessary so the data gets sent when Auto Register Affiliates is enabled.
 			wp_fusion()->user->user_register( $affiliate->user_id, $affiliate_data );
 
 			remove_action( 'user_register', array( wp_fusion()->user, 'user_register' ), 20 );
@@ -787,15 +1066,21 @@ class WPF_AffiliateWP extends WPF_Integrations_Base {
 
 		$apply_tags = wpf_get_option( 'awp_apply_tags', array() );
 
-		// If the affiliates are approved, make sure they have these tags as well
-		if ( 'active' == $affiliate->status ) {
-			$approved_tags = wpf_get_option( 'awp_apply_tags_approved', array() );
-			$apply_tags    = array_merge( $apply_tags, $approved_tags );
+		// If the affiliates are approved, make sure they have these tags as well.
+		if ( 'active' === $affiliate->status ) {
+			$approved_tags = wpf_get_option( 'awp_apply_tags_active', array() );
+			$linked_tag    = wpf_get_option( 'awp_tag_activate_link', array() );
+			$apply_tags    = array_merge( $apply_tags, $approved_tags, $linked_tag );
+		} elseif ( 'pending' === $affiliate->status ) {
+			$pending_tags = wpf_get_option( 'awp_apply_tags_pending', array() );
+			$apply_tags   = array_merge( $apply_tags, $pending_tags );
 		}
 
-		if ( ! empty( $apply_tags ) ) {
-			wp_fusion()->user->apply_tags( $apply_tags, $affiliate->user_id );
-		}
+		remove_action( 'wpf_tags_modified', array( $this, 'tags_modified' ) );
+
+		wp_fusion()->user->apply_tags( $apply_tags, $affiliate->user_id );
+
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
 
 	}
 

@@ -20,7 +20,7 @@ class WPF_If_Menu extends WPF_Integrations_Base {
 	 * @var string $slug
 	 */
 
-	public $slug = 'If_Menu';
+	public $slug = 'if-menu';
 
 	/**
 	 * The plugin name for WP Fusion's module tracking.
@@ -36,7 +36,7 @@ class WPF_If_Menu extends WPF_Integrations_Base {
 	 * @since 3.38.28
 	 * @var string $docs_url
 	 */
-	public $docs_url = false;
+	public $docs_url = 'https://wpfusion.com/documentation/other/if-menu/';
 
 	/**
 	 * Gets things started.
@@ -87,11 +87,24 @@ class WPF_If_Menu extends WPF_Integrations_Base {
 
 		$available_tags = wp_fusion()->settings->get_available_tags_flat();
 
+		$new_tags = array();
+
+		foreach ( $available_tags as $key => $tag ) {
+
+			if ( false !== strpos( $key, "'" ) ) {
+				continue; // can't figure out how to get single quotes to work.
+			}
+
+			$key = rawurlencode( $key );
+
+			$new_tags[ $key ] = wp_strip_all_tags( $tag );
+		}
+
 		$conditions['wpf_req_tags_any'] = array(
 			'id'        => 'wpf_req_tags_any',
 			'type'      => 'multiple',
 			'name'      => __( 'Required tags (any)', 'wp-fusion' ),
-			'options'   => array_map( 'wp_strip_all_tags', $available_tags ),
+			'options'   => $new_tags,
 			'group'     => __( 'WP Fusion', 'wp-fusion' ),
 			'condition' => function( $item, $selected_options = array() ) {
 				return wpf_has_tag( $selected_options, get_current_user_id() );
@@ -102,7 +115,7 @@ class WPF_If_Menu extends WPF_Integrations_Base {
 			'id'        => 'wpf_req_tags_all',
 			'type'      => 'multiple',
 			'name'      => __( 'Required tags (all)', 'wp-fusion' ),
-			'options'   => array_map( 'wp_strip_all_tags', $available_tags ),
+			'options'   => $new_tags,
 			'group'     => __( 'WP Fusion', 'wp-fusion' ),
 			'condition' => function( $item, $selected_options = array() ) {
 				$can_access = true;
@@ -119,7 +132,7 @@ class WPF_If_Menu extends WPF_Integrations_Base {
 			'id'        => 'wpf_req_tags_not',
 			'type'      => 'multiple',
 			'name'      => __( 'Required tags (not)', 'wp-fusion' ),
-			'options'   => array_map( 'wp_strip_all_tags', $available_tags ),
+			'options'   => $new_tags,
 			'group'     => __( 'WP Fusion', 'wp-fusion' ),
 			'condition' => function( $item, $selected_options = array() ) {
 				return ! wpf_has_tag( $selected_options, get_current_user_id() );

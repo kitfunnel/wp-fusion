@@ -31,6 +31,22 @@ class WPF_Ninja_Forms extends NF_Abstracts_Action {
 	 */
 	protected $_priority = 10;
 
+	/**
+	 * The link to the documentation on the WP Fusion website.
+	 *
+	 * @since 3.42.5
+	 * @var string $docs_url
+	 */
+	public $docs_url = 'https://wpfusion.com/documentation/lead-generation/ninja-forms/';
+
+	/**
+	 * The plugin name for WP Fusion's module tracking.
+	 *
+	 * @since 3.42.5
+	 * @var string $name
+	 */
+	public $name = 'Ninja Forms';
+
 
 	/**
 	 * Gets things started
@@ -58,6 +74,8 @@ class WPF_Ninja_Forms extends NF_Abstracts_Action {
 		$this->_settings = array_merge( $this->_settings, $settings );
 
 		add_action( 'ninja_forms_builder_templates', array( $this, 'row_template' ) );
+
+		wp_fusion()->integrations->{'ninja-forms'} = $this;
 
 	}
 

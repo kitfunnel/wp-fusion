@@ -45,8 +45,10 @@ class WPF_Woo_Memberships extends WPF_Integrations_Base {
 		add_action( 'wc_memberships_grant_membership_access_from_purchase', array( $this, 'sync_expiration_date' ), 20, 2 ); // 20 so it runs after save_subscription_data()
 		add_action( 'wc_memberships_user_membership_created', array( $this, 'membership_level_created' ), 20, 2 );
 		add_action( 'wc_memberships_user_membership_saved', array( $this, 'membership_level_saved' ), 20, 2 );
+		add_action( 'post_updated', array( $this, 'maybe_membership_plan_changed' ), 10, 3 );
 		add_action( 'wc_memberships_user_membership_status_changed', array( $this, 'membership_status_changed' ), 10, 3 );
 		add_action( 'wc_memberships_user_membership_transferred', array( $this, 'membership_transferred' ), 10, 3 );
+		add_action( 'wc_memberships_user_membership_deleted', array( $this, 'membership_deleted' ) );
 		add_action( 'wpf_tags_modified', array( $this, 'update_memberships' ), 10, 2 );
 		add_filter( 'wpf_watched_meta_fields', array( $this, 'watch_profile_fields' ) );
 
@@ -74,12 +76,15 @@ class WPF_Woo_Memberships extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Updates tags for a user membership based on membership status
-	 *
-	 * @access public
-	 * @return void
+	 * Update tags for a user membership based on membership status.
+	 * 
+	 * Updates the users tags in the CRM and in the WordPress User based on their membership status.
+	 * 
+	 * @since 3.41.17
+	 * 
+	 * @param  WC_Memberships_User_Membership $user_membership The user membership object.
+	 * @param  string $status                 The status of the membership.
 	 */
-
 	public function apply_tags_for_user_membership( $user_membership, $status = false ) {
 
 		$settings = get_post_meta( $user_membership->plan_id, 'wpf-settings-woo', true );
@@ -157,7 +162,27 @@ class WPF_Woo_Memberships extends WPF_Integrations_Base {
 		}
 
 		add_action( 'wpf_tags_modified', array( $this, 'update_memberships' ), 10, 2 );
+	}
 
+	/**
+	 * Remove tags when a membership is deleted.
+	 * 
+	 * Running on wc_memberships_user_membership_deleted, removes tags from the WordPress User and the CRM.
+	 * The User Membership Object contains the deleted membership's data, so we are able to retrieve the tags to remove via the plan settings.
+	 *
+	 * @since 3.41.18
+	 * 
+	 * @param WC_Memberships_User_Membership $user_membership The user membership object.
+	 */
+	public function membership_deleted( $user_membership ) {
+
+		$settings = get_post_meta( $user_membership->plan_id, 'wpf-settings-woo', true );
+
+		if ( empty( $settings ) || empty( $settings['apply_tags_active'] ) || empty( $settings['remove_tags'] ) ) {
+			return;
+		}
+
+		wp_fusion()->user->remove_tags( $settings['apply_tags_active'], $user_membership->user_id );
 	}
 
 	/**
@@ -240,12 +265,13 @@ class WPF_Woo_Memberships extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Sync expiry date and apply tags when a level is saved in the admin
+	 * Sync expiry date and apply tags when a level is saved in the admin.
 	 *
-	 * @access public
-	 * @return void
+	 * @since unknown
+	 * 
+	 * @param WC_Memberships_Membership_Plan $membership The membership plan object.
+	 * @param array                          $args       The passed arguments.
 	 */
-
 	public function membership_level_saved( $membership, $args ) {
 
 		if ( is_admin() && doing_action( 'save_post' ) ) {
@@ -254,6 +280,9 @@ class WPF_Woo_Memberships extends WPF_Integrations_Base {
 				return; // This is handled in ::membership_transferred() so don't need to update any tags here.
 			}
 
+			/**
+			 * Starting to sync expiry dates and apply tags.
+			 */
 			$user_membership = wc_memberships_get_user_membership( $args['user_membership_id'] );
 
 			if ( empty( $user_membership ) ) {
@@ -263,6 +292,29 @@ class WPF_Woo_Memberships extends WPF_Integrations_Base {
 			$this->sync_membership_fields( $user_membership );
 
 			$this->apply_tags_for_user_membership( $user_membership );
+
+		}
+
+	}
+
+	/**
+	 * Removes tags from the previous level when editing a membership in the admin.
+	 *
+	 * @since 3.41.18
+	 * 
+	 * @param int     $post_id      The post ID.
+	 * @param WP_Post $post_after   The post after the update.
+	 * @param WP_Post $post_before  The post before the update.
+	 */
+	public function maybe_membership_plan_changed( $post_id, $post_after, $post_before ) {
+
+		if ( 'wc_user_membership' === get_post_type( $post_id ) && $post_after->post_parent !== $post_before->post_parent ) {
+
+			$settings = get_post_meta( $post_before->post_parent, 'wpf-settings-woo', true );
+
+			if ( ! empty( $settings ) && ! empty( $settings['remove_tags'] ) && ! empty( $settings['apply_tags_active'] ) ) {
+				wp_fusion()->user->remove_tags( $settings['apply_tags_active'], $post_after->post_author );
+			}
 
 		}
 
@@ -645,182 +697,182 @@ class WPF_Woo_Memberships extends WPF_Integrations_Base {
 
 			echo '<div class="options_group wpf-product">';
 
-		if ( class_exists( 'WC_Subscriptions' ) ) {
-
-			echo '<p class="notice notice-warning" style="border-top: 1px solid #eee; margin: 15px 10px 0;">';
-			echo '<strong>Heads up:</strong> It looks like WooCommerce Subscriptions is active. If you\'re selling this membership plan via a subscription, it\'s preferrable to configure tagging by editing the subscription product.<br /><br />Specifying tags in any of these settings is likely to cause unexpected behavior, <strong>including users getting unexpectedly unenrolled from membership levels or having their tags unexpectedly removed</strong>.';
-			echo '</p>';
-
-		}
-
 				echo '<p>' . sprintf( __( 'For more information on these settings, %1$ssee our documentation%2$s.', 'wp-fusion' ), '<a href="https://wpfusion.com/documentation/membership/woocommerce-memberships/" target="_blank">', '</a>' ) . '</p>';
+
+				if ( class_exists( 'WC_Subscriptions' ) ) {
+
+					echo '<p class="notice notice-warning" style="border-top: 1px solid #eee; margin: 15px 10px 0;">';
+					echo '<strong>Heads up:</strong> It looks like WooCommerce Subscriptions is active. If you\'re selling this membership plan via a subscription, it\'s preferrable to configure tagging by editing the subscription product.<br /><br />Specifying tags in any of these settings is likely to cause unexpected behavior, <strong>including users getting unexpectedly unenrolled from membership levels or having their tags unexpectedly removed</strong>.';
+					echo '</p>';
+
+				}
+
+				echo '<p class="form-field"><label><strong>' . __( 'Active Memberships', 'wp-fusion' ) . '</strong></label></p>';
+
+				// Active
+
+				echo '<p class="form-field">';
+
+				echo '<label for="wpf-settings-woo-apply_tags_active">' . __( 'Apply tags', 'wp-fusion' ) . '</label>';
+
+				$args = array(
+					'setting'   => $settings['apply_tags_active'],
+					'meta_name' => 'wpf-settings-woo',
+					'field_id'  => 'apply_tags_active',
+				);
+
+				wpf_render_tag_multiselect( $args );
+
+				echo '<span class="description">' . __( 'Apply these tags when the membership is active (status either Active, Complimentary, or Free Trial).', 'wp-fusion' ) . '</span>';
+
+				echo '</p>';
+
+				echo '<p class="form-field"><label for="wpf-remove-tags-woo">' . __( 'Remove tags', 'wp-fusion' ) . '</label>';
+				echo '<input class="checkbox" type="checkbox" id="wpf-remove-tags-woo" name="wpf-settings-woo[remove_tags]" value="1" ' . checked( $settings['remove_tags'], 1, false ) . ' />';
+				echo '<span class="description">' . __( 'Remove active tags (above) when the membership is paused, expires, switched, or is fully cancelled.', 'wp-fusion' ) . '</span>';
+				echo '</p>';
+
+			echo '</div>';
+
+			echo '<div class="options_group wpf-product">';
 
 				echo '<p class="form-field"><label><strong>' . __( 'Automated Enrollment', 'wp-fusion' ) . '</strong></label></p>';
 
 				echo '<p class="form-field"><label for="wpf-apply-tags-woo">' . __( 'Link with Tag', 'wp-fusion' ) . '</label>';
 
-					$args = array(
-						'setting'     => $settings['tag_link'],
-						'meta_name'   => 'wpf-settings-woo',
-						'field_id'    => 'tag_link',
-						'placeholder' => 'Select Tag',
-						'limit'       => 1,
-					);
+				$args = array(
+					'setting'     => $settings['tag_link'],
+					'meta_name'   => 'wpf-settings-woo',
+					'field_id'    => 'tag_link',
+					'placeholder' => 'Select Tag',
+					'limit'       => 1,
+				);
 
-					wpf_render_tag_multiselect( $args );
+				wpf_render_tag_multiselect( $args );
 
-					echo '<span class="description">' . sprintf( __( 'When this tag is applied in %s, the user will automatically be enrolled in the membership plan. Likewise, if the tag is removed, their membership will be paused.', 'wp-fusion' ), wp_fusion()->crm->name ) . '</span>';
+				echo '<span class="description">' . sprintf( __( 'When this tag is applied in %s, the user will automatically be enrolled in the membership plan. Likewise, if the tag is removed, their membership will be paused.', 'wp-fusion' ), wp_fusion()->crm->name ) . '</span>';
 
-					echo '<small>' . __( '<strong>Note:</strong> This setting is only needed if you are triggering membership enrollments via your CRM or an outside system (like ThriveCart).', 'wp-fusion' ) . '</small>';
+				echo '<small>' . __( '<strong>Note:</strong> This setting is only needed if you are triggering membership enrollments via your CRM or an outside system (like ThriveCart).', 'wp-fusion' ) . '</small>';
 
-					echo '</p>';
+				echo '</p>';
 
-					echo '</div>';
+			echo '</div>';
 
-					echo '<div class="options_group wpf-product">';
+			echo '<div class="options_group wpf-product" style="margin-bottom: 20px;">';
 
-					echo '<p class="form-field"><label><strong>' . __( 'Active Memberships', 'wp-fusion' ) . '</strong></label></p>';
+				echo '<p class="form-field"><label><strong>' . __( 'Additional Statuses', 'wp-fusion' ) . '</strong></label></p>';
 
-					// Active
+				// Complimentary
 
-					echo '<p class="form-field">';
+				echo '<p class="form-field">';
 
-					echo '<label for="wpf-settings-woo-apply_tags_active">' . __( 'Apply tags', 'wp-fusion' ) . '</label>';
+				echo '<label for="wpf-settings-woo-apply_tags_active">' . __( 'Complimentary', 'wp-fusion' ) . '</label>';
 
-					$args = array(
-						'setting'   => $settings['apply_tags_active'],
-						'meta_name' => 'wpf-settings-woo',
-						'field_id'  => 'apply_tags_active',
-					);
+				$args = array(
+					'setting'   => $settings['apply_tags_complimentary'],
+					'meta_name' => 'wpf-settings-woo',
+					'field_id'  => 'apply_tags_complimentary',
+				);
 
-					wpf_render_tag_multiselect( $args );
+				wpf_render_tag_multiselect( $args );
 
-					echo '<span class="description">' . __( 'Apply these tags when the membership is active (status either Active, Complimentary, or Free Trial).', 'wp-fusion' ) . '</span>';
+				echo '<span class="description">' . __( 'Apply these tags when the membership is set to Complimentary.', 'wp-fusion' ) . '</span>';
 
-					echo '</p>';
+				echo '</p>';
 
-					echo '<p class="form-field"><label for="wpf-remove-tags-woo">' . __( 'Remove tags', 'wp-fusion' ) . '</label>';
-					echo '<input class="checkbox" type="checkbox" id="wpf-remove-tags-woo" name="wpf-settings-woo[remove_tags]" value="1" ' . checked( $settings['remove_tags'], 1, false ) . ' />';
-					echo '<span class="description">' . __( 'Remove active tags (above) when the membership is paused, expires, switched, or is fully cancelled.', 'wp-fusion' ) . '</span>';
-					echo '</p>';
+				// Free Trial
 
-					echo '</div>';
+				echo '<p class="form-field">';
 
-					echo '<div class="options_group wpf-product" style="margin-bottom: 20px;">';
+				echo '<label for="wpf-settings-woo-apply_tags_active">' . __( 'Free Trial', 'wp-fusion' ) . '</label>';
 
-					echo '<p class="form-field"><label><strong>' . __( 'Additional Statuses', 'wp-fusion' ) . '</strong></label></p>';
+				$args = array(
+					'setting'   => $settings['apply_tags_free_trial'],
+					'meta_name' => 'wpf-settings-woo',
+					'field_id'  => 'apply_tags_free_trial',
+				);
 
-					// Complimentary
+				wpf_render_tag_multiselect( $args );
 
-					echo '<p class="form-field">';
+				echo '<span class="description">' . __( 'Apply these tags when the membership is set to Free Trial.', 'wp-fusion' ) . '</span>';
 
-					echo '<label for="wpf-settings-woo-apply_tags_active">' . __( 'Complimentary', 'wp-fusion' ) . '</label>';
+				echo '</p>';
 
-					$args = array(
-						'setting'   => $settings['apply_tags_complimentary'],
-						'meta_name' => 'wpf-settings-woo',
-						'field_id'  => 'apply_tags_complimentary',
-					);
+				// Paused
 
-					wpf_render_tag_multiselect( $args );
+				echo '<p class="form-field">';
 
-					echo '<span class="description">' . __( 'Apply these tags when the membership is set to Complimentary.', 'wp-fusion' ) . '</span>';
+				echo '<label for="wpf-settings-woo-apply_tags_active">' . __( 'Paused', 'wp-fusion' ) . '</label>';
 
-					echo '</p>';
+				$args = array(
+					'setting'   => $settings['apply_tags_paused'],
+					'meta_name' => 'wpf-settings-woo',
+					'field_id'  => 'apply_tags_paused',
+				);
 
-					// Free Trial
+				wpf_render_tag_multiselect( $args );
 
-					echo '<p class="form-field">';
+				echo '<span class="description">' . __( 'Apply these tags when the membership is Paused. Will be removed if the membership is reactivated.', 'wp-fusion' ) . '</span>';
 
-					echo '<label for="wpf-settings-woo-apply_tags_active">' . __( 'Free Trial', 'wp-fusion' ) . '</label>';
+				echo '</p>';
 
-					$args = array(
-						'setting'   => $settings['apply_tags_free_trial'],
-						'meta_name' => 'wpf-settings-woo',
-						'field_id'  => 'apply_tags_free_trial',
-					);
+				// Expired
 
-					wpf_render_tag_multiselect( $args );
+				echo '<p class="form-field">';
 
-					echo '<span class="description">' . __( 'Apply these tags when the membership is set to Free Trial.', 'wp-fusion' ) . '</span>';
+				echo '<label for="wpf-settings-woo-apply_tags_expired">' . __( 'Expired', 'wp-fusion' ) . '</label>';
 
-					echo '</p>';
+				$args = array(
+					'setting'   => $settings['apply_tags_expired'],
+					'meta_name' => 'wpf-settings-woo',
+					'field_id'  => 'apply_tags_expired',
+				);
 
-					// Paused
+				wpf_render_tag_multiselect( $args );
 
-					echo '<p class="form-field">';
+				echo '<span class="description">' . __( 'Apply these tags when the membership expires. Will be removed if the membership is reactivated.', 'wp-fusion' ) . '</span>';
 
-					echo '<label for="wpf-settings-woo-apply_tags_active">' . __( 'Paused', 'wp-fusion' ) . '</label>';
+				echo '</p>';
 
-					$args = array(
-						'setting'   => $settings['apply_tags_paused'],
-						'meta_name' => 'wpf-settings-woo',
-						'field_id'  => 'apply_tags_paused',
-					);
+				// Pending
 
-					wpf_render_tag_multiselect( $args );
+				echo '<p class="form-field">';
 
-					echo '<span class="description">' . __( 'Apply these tags when the membership is Paused. Will be removed if the membership is reactivated.', 'wp-fusion' ) . '</span>';
+				echo '<label for="wpf-settings-woo-apply_tags_pending">' . __( 'Pending Cancellation', 'wp-fusion' ) . '</label>';
 
-					echo '</p>';
+				$args = array(
+					'setting'   => $settings['apply_tags_pending'],
+					'meta_name' => 'wpf-settings-woo',
+					'field_id'  => 'apply_tags_pending',
+				);
 
-					// Expired
+				wpf_render_tag_multiselect( $args );
 
-					echo '<p class="form-field">';
+				echo '<span class="description">' . __( 'Apply these tags when a membership has been cancelled by the user but there is still time remaining in the membership. Will be removed if the membership is reactivated.', 'wp-fusion' ) . '</span>';
 
-					echo '<label for="wpf-settings-woo-apply_tags_expired">' . __( 'Expired', 'wp-fusion' ) . '</label>';
+				echo '</p>';
 
-					$args = array(
-						'setting'   => $settings['apply_tags_expired'],
-						'meta_name' => 'wpf-settings-woo',
-						'field_id'  => 'apply_tags_expired',
-					);
+				// Cancel
 
-					wpf_render_tag_multiselect( $args );
+				echo '<p class="form-field">';
 
-					echo '<span class="description">' . __( 'Apply these tags when the membership expires. Will be removed if the membership is reactivated.', 'wp-fusion' ) . '</span>';
+				echo '<label for="wpf-settings-woo-apply_tags_cancelled">' . __( 'Cancelled', 'wp-fusion' ) . '</label>';
 
-					echo '</p>';
+				$args = array(
+					'setting'   => $settings['apply_tags_cancelled'],
+					'meta_name' => 'wpf-settings-woo',
+					'field_id'  => 'apply_tags_cancelled',
+				);
 
-					// Pending
+				wpf_render_tag_multiselect( $args );
 
-					echo '<p class="form-field">';
+				echo '<span class="description">' . __( 'Apply these tags when the membership is fully cancelled. Will be removed if the membership is reactivated.', 'wp-fusion' ) . '</span>';
 
-					echo '<label for="wpf-settings-woo-apply_tags_pending">' . __( 'Pending Cancellation', 'wp-fusion' ) . '</label>';
+				echo '</p>';
 
-					$args = array(
-						'setting'   => $settings['apply_tags_pending'],
-						'meta_name' => 'wpf-settings-woo',
-						'field_id'  => 'apply_tags_pending',
-					);
+			echo '</div>';
 
-					wpf_render_tag_multiselect( $args );
-
-					echo '<span class="description">' . __( 'Apply these tags when a membership has been cancelled by the user but there is still time remaining in the membership. Will be removed if the membership is reactivated.', 'wp-fusion' ) . '</span>';
-
-					echo '</p>';
-
-					// Cancel
-
-					echo '<p class="form-field">';
-
-					echo '<label for="wpf-settings-woo-apply_tags_cancelled">' . __( 'Cancelled', 'wp-fusion' ) . '</label>';
-
-					$args = array(
-						'setting'   => $settings['apply_tags_cancelled'],
-						'meta_name' => 'wpf-settings-woo',
-						'field_id'  => 'apply_tags_cancelled',
-					);
-
-					wpf_render_tag_multiselect( $args );
-
-					echo '<span class="description">' . __( 'Apply these tags when the membership is fully cancelled. Will be removed if the membership is reactivated.', 'wp-fusion' ) . '</span>';
-
-					echo '</p>';
-
-					echo '</div>';
-
-					echo '</div>';
+		echo '</div>';
 
 	}
 

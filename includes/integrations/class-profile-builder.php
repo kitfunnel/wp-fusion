@@ -41,6 +41,23 @@ class WPF_Profile_Builder extends WPF_Integrations_Base {
 
 	public function init() {
 
+		// User registrations.
+
+		// This cleans the user cache when activating an account via activation link. Fixes
+		// an issue with W3 Total Cache where custom profile fields aren't synced.
+
+		add_action( 'wpf_user_register_start', 'clean_user_cache' );
+
+		// Sync custom profile fields after they've been copied over to the usermeta table
+		// after activation via an email link.
+
+		if ( isset( $_GET['activation_key'] ) ) {
+
+			remove_action( 'user_register', array( wp_fusion()->user, 'user_register' ), 20 );
+			add_action( 'wppb_activate_user', array( wp_fusion()->user, 'user_register' ) );
+
+		}
+
 		// Profile updates
 		add_filter( 'wpf_user_update', array( $this, 'profile_update' ), 10, 2 );
 

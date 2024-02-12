@@ -56,7 +56,7 @@ class WPF_bbPress extends WPF_Integrations_Base {
 		if ( wpf_get_option( 'restrict_content', true ) ) {
 
 			// Access control and redirects.
-			add_action( 'wpf_begin_redirect', array( $this, 'begin_redirect' ), 10, 2 );
+			add_filter( 'wpf_begin_redirect', array( $this, 'begin_redirect' ) );
 			add_filter( 'wpf_redirect_post_id', array( $this, 'redirect_post_id' ) );
 			add_filter( 'wpf_user_can_access_post_id', array( $this, 'user_can_access_post_id' ) );
 			add_filter( 'wpf_post_access_meta', array( $this, 'inherit_permissions_from_forum' ), 10, 2 );
@@ -87,20 +87,36 @@ class WPF_bbPress extends WPF_Integrations_Base {
 			'section' => 'integrations',
 		);
 
-		$settings['bbp_lock'] = array(
-			'title'   => __( 'Restrict Archives', 'wp-fusion' ),
-			'desc'    => sprintf( __( 'Restrict access to forums archive (%s/forums/)', 'wp-fusion' ), home_url() ),
-			'type'    => 'checkbox',
-			'section' => 'integrations',
-			'unlock'  => array( 'bbp_lock_all', 'bbp_allow_tags', 'bbp_redirect' ),
-		);
+		if ( ! get_option( '_bbp_root_slug_custom_slug' ) ) {
+
+			// with bbPress (but not BuddyPress), the forums don't have a post ID.
+
+			$settings['bbp_lock'] = array(
+				'title'   => __( 'Restrict Archives', 'wp-fusion' ),
+				'desc'    => sprintf( __( 'Restrict access to forums archive (%s/forums/)', 'wp-fusion' ), home_url() ),
+				'type'    => 'checkbox',
+				'section' => 'integrations',
+			);
+
+		}
 
 		$settings['bbp_lock_all'] = array(
 			'title'   => __( 'Restrict Forums', 'wp-fusion' ),
-			'desc'    => __( 'Restrict access to all forums in addition to the archive', 'wp-fusion' ),
+			'desc'    => __( 'Restrict access to all forums.', 'wp-fusion' ),
 			'type'    => 'checkbox',
 			'section' => 'integrations',
 		);
+
+		if ( function_exists( 'bp_core_get_directory_page_id' ) ) {
+
+			$forums_page_id = bp_get_option( '_bbp_root_slug_custom_slug', '' );
+
+			if ( $forums_page_id ) {
+				$settings['bbp_lock_all']['desc'] .= ' ' . sprintf( __( 'The forum archive can be protected by editing the %s page.', 'wp-fusion' ), '<a href="' . get_edit_post_link( $forums_page_id ) . '">' . get_the_title( $forums_page_id ) . '</a>' );
+				$settings['bbp_header']['title']   = __( 'BuddyBoss Forums integration', 'wp-fusion' );
+			}
+
+		}
 
 		$settings['bbp_allow_tags'] = array(
 			'title'     => __( 'Required tags (any)', 'wp-fusion' ),
@@ -329,6 +345,18 @@ class WPF_bbPress extends WPF_Integrations_Base {
 
 			$post_id = get_post_meta( $post_id, '_bbp_topic_id', true );
 
+		} elseif ( bbp_is_single_user() && ! function_exists( 'bp_core_get_directory_page_id' ) && 'post' === get_post_type( $post_id ) ) {
+
+			// For some reason bbPress (not BuddyPress) uses the first post ID on the
+			// site for the profile pages.
+
+			$forum_root_slug = bbp_get_root_slug(); // Get the forum root slug.
+			$forum_page      = bbp_get_page_by_path( $forum_root_slug ); // Get the forum page by slug.
+
+			if ( ! empty( $forum_page ) ) {
+				$post_id = $forum_page->ID; // Get the page ID.
+			}
+
 		}
 
 		return $post_id;
@@ -493,41 +521,49 @@ class WPF_bbPress extends WPF_Integrations_Base {
 	/**
 	 * Enables redirects for bbP forum archives
 	 *
-	 * @access public
-	 * @return void
+	 * @param  bool $bypass Whether or not to bypass the redirect.
+	 * @return bool Whether or not to bypass the redirect.
 	 */
 
-	public function begin_redirect( $bypass, $user_id ) {
+	public function begin_redirect( $bypass ) {
 
-		if ( wpf_get_option( 'bbp_lock' ) ) {
+		if ( ! wpf_get_option( 'bbp_lock' ) && ! wpf_get_option( 'bbp_lock_all' ) ) {
+			return $bypass;
+		}
 
-			global $post;
+		// If admins are excluded from restrictions.
+		if ( wpf_admin_override() ) {
+			return $bypass;
+		}
 
-			if (
-				bbp_is_forum_archive() ||
-				bbp_is_search() ||
-				( is_object( $post ) && bbp_is_forum( $post->ID ) && wpf_get_option( 'bbp_lock_all' ) ) ||
-				( function_exists( 'bp_is_current_action' ) && bp_is_current_action( urlencode( get_option( '_bbp_forum_slug', 'forum' ) ) ) )
-			) {
+		$redirect = apply_filters( 'wpf_redirect_url', wpf_get_option( 'bbp_redirect' ), false );
 
-				$redirect = apply_filters( 'wpf_redirect_url', wpf_get_option( 'bbp_redirect' ), $post_id = false );
+		if ( empty( $redirect ) ) {
+			return $bypass;
+		}
 
-				if ( empty( $redirect ) ) {
-					return $bypass;
-				}
+		if ( wpf_get_option( 'bbp_lock' ) && bbp_is_forum_archive() ) {
 
-				// If admins are excluded from restrictions.
-				if ( wpf_admin_override() ) {
-					return $bypass;
-				}
+			// Archives are locked.
 
-				if ( ! wpf_is_user_logged_in() || ! wpf_has_tag( wpf_get_option( 'bbp_allow_tags', array() ) ) ) {
-					wp_redirect( $redirect, 302, 'WP Fusion; Restricted forum.' );
-					exit();
-				}
-			} else {
-				return false; // Restrict Archives is enabled but this isn't a bbPress request.
+			if ( ! wpf_is_user_logged_in() || ! wpf_has_tag( wpf_get_option( 'bbp_allow_tags', array() ) ) ) {
+				wp_redirect( $redirect, 302, 'WP Fusion; Restricted forum archives.' );
+				exit();
 			}
+
+			return true; // bypass any redirect logic if they have access.
+
+		} elseif ( wpf_get_option( 'bbp_lock_all' ) && ! bbp_is_forum_archive() && bbp_is_forum( get_the_ID() ) ) {
+
+			// See if it's currently a forum.
+
+			if ( ! wpf_is_user_logged_in() || ! wpf_has_tag( wpf_get_option( 'bbp_allow_tags', array() ) ) ) {
+				wp_redirect( $redirect, 302, 'WP Fusion; Restricted forum ' . $post->ID );
+				exit();
+			}
+
+			return false; // still check the individual forums for access, don't bypass the redirect.
+
 		} elseif ( bbp_is_search() ) {
 
 			return true; // never restrict the search page.

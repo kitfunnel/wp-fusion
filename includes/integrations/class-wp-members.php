@@ -43,6 +43,7 @@ class WPF_WP_Members extends WPF_Integrations_Base {
 
 		add_filter( 'wpf_user_register', array( $this, 'user_register' ), 10, 2 );
 		add_action( 'wpmem_user_activated', array( $this, 'user_activated' ) );
+		add_action( 'wpmem_account_validation_success', array( $this, 'user_activated' ) );
 
 		// WPF stuff
 		add_filter( 'wpf_meta_field_groups', array( $this, 'add_meta_field_group' ) );
@@ -54,17 +55,28 @@ class WPF_WP_Members extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Don't sync the user to the CRM if Defer Until Activation is enabled and
-	 * the user isn't activated yet.
+	 * Don't sync the user to the CRM if Defer Until Activation is enabled,
+	 * the user isn't activated yet and the user hasn't click on the email validation link.
 	 *
 	 * @since 3.40.23
+	 * @since 3.41.19 Updated to work for email confirmation as well as admin activation.
+	 * 
+	 * @param array $post_data The user meta submitted at registration.
+	 * @param int   $user_id The ID of the user who registered.
 	 *
-	 * @return array User meta submitted at registration.
+	 * @return array|null User meta submitted at registration or null.
 	 */
 	public function user_register( $post_data, $user_id ) {
 
-		if ( wpf_get_option( 'wp_members_defer' ) && ! wpmem_is_user_activated( $user_id ) ) {
-			return null;
+		if ( wpf_get_option( 'wp_members_defer' ) ) {
+
+			if ( wpmem_is_act_link() && ! wpmem_is_user_confirmed( $user_id ) ) {
+				return null;
+			}
+	
+			if ( wpmem_is_mod_reg() && ! wpmem_is_user_activated( $user_id ) ) {
+				return null;
+			}
 		}
 
 		return $post_data;
@@ -72,7 +84,7 @@ class WPF_WP_Members extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Triggered after activation, syncs the new user to the CRM
+	 * Triggered after activation, syncs the new user to the CRM.
 	 *
 	 * @access public
 	 * @return void
@@ -81,9 +93,7 @@ class WPF_WP_Members extends WPF_Integrations_Base {
 	public function user_activated( $user_id ) {
 
 		if ( wpf_get_option( 'wp_members_defer' ) ) {
-
 			wp_fusion()->user->user_register( $user_id );
-
 		}
 
 	}
@@ -150,15 +160,13 @@ class WPF_WP_Members extends WPF_Integrations_Base {
 
 		$settings['wp_members_header'] = array(
 			'title'   => __( 'WP-Members Integration', 'wp-fusion' ),
-			'std'     => 0,
 			'type'    => 'heading',
 			'section' => 'integrations',
 		);
 
 		$settings['wp_members_defer'] = array(
 			'title'   => __( 'Defer Until Activation', 'wp-fusion' ),
-			'desc'    => sprintf( __( 'Don\'t send any data to %s until the account has been activated.', 'wp-fusion' ), wp_fusion()->crm->name ),
-			'std'     => 0,
+			'desc'    => sprintf( __( 'Don\'t send any data to %s until the account has been activated, either by an admin or via email confirmation.', 'wp-fusion' ), wp_fusion()->crm->name ),
 			'type'    => 'checkbox',
 			'section' => 'integrations',
 		);

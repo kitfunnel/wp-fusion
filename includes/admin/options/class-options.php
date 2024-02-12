@@ -120,6 +120,7 @@ class WP_Fusion_Options {
 		'input_disabled' => false,
 		'unlock'         => null,
 		'lock'           => null,
+		'placeholder'    => false,
 	);
 
 	/**
@@ -263,6 +264,13 @@ class WP_Fusion_Options {
 			if ( empty( $this->post_data[ $id ] ) && 'hidden' === $setting['type'] ) {
 				// Don't erase saved values with empty hidden fields.
 				unset( $this->post_data[ $id ] );
+			}
+
+			if ( true === $setting['input_disabled'] ) {
+
+				// OAuth refresh tokens, etc., don't need to be saved.
+				unset( $this->post_data[ $id ] );
+
 			}
 
 			if ( isset( $this->post_data[ $id ] ) && $this->post_data[ $id ] !== $this->options[ $id ] ) {
@@ -1552,8 +1560,9 @@ class WP_Fusion_Options {
 	private function default_field_number() {
 
 		$args = array(
-			'min' => 0,
-			'max' => null,
+			'min'  => 0,
+			'max'  => null,
+			'step' => 1,
 		);
 
 		return $args;
@@ -1568,7 +1577,11 @@ class WP_Fusion_Options {
 	 */
 	private function show_field_number( $id, $field, $subfield_id = null ) {
 
-		echo '<input id="' . esc_attr( $id ) . '" type="number" class="select form-control ' . esc_attr( $field['class'] ) . '" name="' . $this->option_group . '[' . esc_attr( $id ) . ']" min="' . (int) $field['min'] . '" ' . ( $field['max'] ? 'max=' . (int) $field['max'] : '' ) . ' value="' . esc_attr( $this->options[ $id ] ) . '" ' . ( $field['disabled'] ? 'disabled="true"' : '' ) . '>';
+		if ( empty( $this->options[ $id ] ) ) {
+			$this->options[ $id ] = 0;
+		}
+
+		echo '<input id="' . esc_attr( $id ) . '" type="number" class="select form-control ' . esc_attr( $field['class'] ) . '" name="' . $this->option_group . '[' . esc_attr( $id ) . ']" min="' . (int) $field['min'] . '" ' . ( $field['max'] ? 'max=' . (int) $field['max'] : '' ) . ' step="' . floatval( $field['step'] ) . '" value="' . esc_attr( $this->options[ $id ] ) . '" ' . ( $field['disabled'] ? 'disabled="true"' : '' ) . '>';
 	}
 
 	/**
@@ -1588,7 +1601,7 @@ class WP_Fusion_Options {
 			return new WP_Error( 'error', __( 'Number must be less than or equal to ' . $setting['max'] . '.' ), $input );
 		} else {
 
-			return (int) $input;
+			return floatval( $input );
 		}
 	}
 

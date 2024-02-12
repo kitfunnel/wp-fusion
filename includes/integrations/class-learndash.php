@@ -48,6 +48,14 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	public $filter_course_sections = array();
 
 	/**
+	 * Helps track if we need to output extra CSS to disable clicks on locked lessons.
+	 *
+	 * @since 3.41.17
+	 * @var  bool Whether or not we're locking lessons.
+	 */
+	public $locking_lessons = false;
+
+	/**
 	 * Gets things started
 	 *
 	 * @access  public
@@ -80,6 +88,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 			add_filter( 'learndash-nav-widget-lesson-class', array( $this, 'lesson_row_class' ), 10, 2 );
 			add_filter( 'learndash_lesson_attributes', array( $this, 'lesson_attributes' ), 10, 2 ); // Pre LD 4.2.0.
 			add_filter( 'learndash_course_step_attributes', array( $this, 'course_step_attributes' ), 10, 4 ); // LD 4.2.0+.
+			add_action( 'wp_print_footer_scripts', array( $this, 'add_inline_lesson_locked_styles' ) );
 
 			// Filter Course Steps.
 			add_filter( 'get_post_metadata', array( $this, 'filter_course_steps' ), 10, 4 );
@@ -93,8 +102,8 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		add_action( 'add_meta_boxes', array( $this, 'configure_meta_box' ) );
 		add_action( 'wpf_meta_box_content', array( $this, 'meta_box_notice' ), 5, 2 );
 		add_action( 'wpf_meta_box_content', array( $this, 'meta_box_content' ), 40, 2 );
-
-		add_filter( 'learndash_settings_fields_wpf', array( $this, 'course_settings_fields' ), 10, 2 );
+		add_filter( 'learndash_course_settings_fields_wpf', array( $this, 'course_settings_fields' ), 10, 2 );
+		add_filter( 'learndash_quiz_settings_fields_wpf', array( $this, 'quiz_settings_fields' ), 10, 2 );
 
 		// Assignment settings.
 		add_filter( 'learndash_settings_fields', array( $this, 'lesson_settings_fields' ), 10, 2 );
@@ -143,6 +152,12 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		// Uncanny Toolkit Pro compatibility.
 		add_action( 'wp_fusion_init', array( $this, 'uncanny_toolkit_pro_compatibility' ) );
 
+		// HonorsWP Student - Parent Access compatibility.
+		if ( class_exists( 'Learndash_Access_For_Parents' ) ) {
+			add_filter( 'wpf_user_register', array( $this, 'sync_student_parent_access' ) );
+			add_action( 'init', array( $this, 'sync_student_parent_access_linked' ) );
+		}
+
 		// Export functions.
 		add_filter( 'wpf_export_options', array( $this, 'export_options' ) );
 		add_filter( 'wpf_batch_learndash_courses_init', array( $this, 'batch_init' ) );
@@ -156,7 +171,6 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		add_action( 'wpf_batch_learndash_progress_meta', array( $this, 'batch_step_progress_meta' ) );
 
 	}
-
 
 	/**
 	 * Applies tags when a LearnDash course is completed
@@ -209,69 +223,82 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Applies tags when a LearnDash quiz is completed
+	 * Quiz Completed.
 	 *
-	 * @access public
-	 * @return void
+	 * Applies tags when a LearnDash quiz is completed.
+	 *
+	 * @since 3.41.35 Added support for category progress tracking.
+	 *
+	 * @param array   $data The quiz data.
+	 * @param WP_User $user The user.
 	 */
-
 	public function quiz_completed( $data, $user ) {
 
 		if ( isset( $data['quiz']->ID ) ) {
 			$quiz_id = $data['quiz']->ID;
 		} else {
-			// For grading in the admin
+			// For grading in the admin.
 			$quiz_id = $data['quiz'];
-		}
-
-		$settings = get_post_meta( $quiz_id, 'wpf-settings', true );
-
-		if ( empty( $settings ) ) {
-			return;
 		}
 
 		$update_data = array();
 
-		// Add final score to CRM field.
-		if ( ! empty( $settings['final_score_field'] ) && ! empty( $settings['final_score_field']['crm_field'] ) ) {
+		// Final score.
+
+		// pre 3.41.35, the field mapping was stored in the generic wpf-settings, contact_fields.
+		$settings = (array) get_post_meta( $quiz_id, 'wpf-settings', true );
+
+		if ( wpf_is_field_active( "quiz_final_score_{$quiz_id}" ) ) {
+
+			// New 3.41.35+ storage.
+			$update_data[ "quiz_final_score_{$quiz_id}" ] = $data['percentage'];
+
+		} elseif ( ! empty( $settings['final_score_field'] ) && ! empty( $settings['final_score_field']['crm_field'] ) ) {
+
 			$update_data[ $settings['final_score_field']['crm_field'] ] = $data['percentage'];
+
 		}
 
-		// Add final points to CRM field.
-		if ( ! empty( $settings['final_points_field'] ) && ! empty( $settings['final_points_field']['crm_field'] ) ) {
+		// Final points.
+
+		if ( wpf_is_field_active( "quiz_final_points_{$quiz_id}" ) ) {
+
+			// New 3.41.35+ storage.
+			$update_data[ "quiz_final_points_{$quiz_id}" ] = $data['percentage'];
+
+		} elseif ( ! empty( $settings['final_points_field'] ) && ! empty( $settings['final_points_field']['crm_field'] ) ) {
+
 			$update_data[ $settings['final_points_field']['crm_field'] ] = $data['points'];
-		}
-
-		$contact_id = wp_fusion()->user->get_contact_id( $user->ID );
-
-		if ( empty( $contact_id ) ) {
-			return;
-		}
-
-		if ( ! empty( $update_data ) ) {
-
-			// Sync fields.
-
-			wpf_log( 'info', $user->ID, 'Syncing <a href="' . admin_url( 'post.php?post=' . $quiz_id . '&action=edit' ) . '">' . get_the_title( $quiz_id ) . '</a> quiz fields to ' . wp_fusion()->crm->name . ':', array( 'meta_array_nofilter' => $update_data ) );
-
-			wp_fusion()->crm->update_contact( $contact_id, $update_data, false );
 
 		}
 
-		// Apply tags.
+		// Add category score to CRM field.
 
-		if ( $data['pass'] == true && ! empty( $settings['apply_tags_ld'] ) ) {
+		if ( isset( $_POST['results']['comp'] ) && isset( $_POST['results']['comp']['cats'] ) ) {
 
+			$category_results = array_map( 'intval', $_POST['results']['comp']['cats'] ) ;
+
+			foreach ( $category_results as $id => $category_score ) {
+				$update_data[ "quiz_category_score_{$quiz_id}_{$id}" ] = $category_score;
+			}
+		}
+
+		wp_fusion()->user->push_user_meta( $user->ID, $update_data );
+
+		// Apply tags:
+
+		$settings = (array) get_post_meta( $quiz_id, 'wpf-settings-learndash', true );
+
+		// If the quiz is passed.
+		if ( ! empty( $data['pass'] ) && ! empty( $settings['apply_tags_ld'] ) ) {
 			wp_fusion()->user->apply_tags( $settings['apply_tags_ld'], $user->ID );
-
-		} elseif ( $data['pass'] == false && ! empty( $settings['apply_tags_ld_quiz_fail'] ) ) {
-
-			wp_fusion()->user->apply_tags( $settings['apply_tags_ld_quiz_fail'], $user->ID );
-
 		}
 
+		// If the quiz is failed.
+		if ( empty( $data['pass'] ) && ! empty( $settings['apply_tags_ld_quiz_fail'] ) ) {
+			wp_fusion()->user->apply_tags( $settings['apply_tags_ld_quiz_fail'], $user->ID );
+		}
 	}
-
 
 	/**
 	 * Applies tags when a LearnDash topic is completed
@@ -292,40 +319,6 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 		if ( ! empty( $settings ) && ! empty( $settings['apply_tags_ld'] ) ) {
 			wp_fusion()->user->apply_tags( $settings['apply_tags_ld'], $data['user']->ID );
-		}
-
-	}
-
-	/**
-	 * Applies tags when a LearnDash essay is submitted
-	 *
-	 * @access public
-	 * @return void
-	 */
-
-	public function essay_submitted( $essay_id, $essay_args ) {
-
-		$quid_pro_id = get_post_meta( $essay_id, 'quiz_id', true );
-
-		$args = array(
-			'post_type'  => 'sfwd-quiz',
-			'fields'     => 'ids',
-			'meta_key'   => 'quiz_pro_id',
-			'meta_value' => $quid_pro_id,
-		);
-
-		$quizzes = get_posts( $args );
-
-		if ( empty( $quizzes ) ) {
-			return;
-		}
-
-		$settings = get_post_meta( $quizzes[0], 'wpf-settings', true );
-
-		if ( ! empty( $settings['apply_tags_ld_essay_submitted'] ) ) {
-
-			wp_fusion()->user->apply_tags( $settings['apply_tags_ld_essay_submitted'], $essay_args['post_author'] );
-
 		}
 
 	}
@@ -453,16 +446,25 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 		// Save the user activity.
 
-		if ( ! empty( $args['course_id'] ) ) {
+		if ( ! empty( $args['course_id'] ) && ( wpf_is_field_active( 'course_progress_' . $args['course_id'] ) || wpf_is_field_active( 'ld_last_course_progressed' ) ) ) {
 
 			remove_action( 'learndash_update_user_activity', array( $this, 'update_user_activity' ) );
+
+			$update_data = array();
+
+			// For performance, we're only going to update this if it's changed.
+
+			$previous_last_course_progressed = get_user_meta( $args['user_id'], 'ld_last_course_progressed', true );
 
 			// Stop special chars in title name getting HTML encoded.
 			remove_filter( 'the_title', 'wptexturize' );
 
-			$update_data = array(
-				'ld_last_course_progressed' => get_post_field( 'post_title', $args['course_id'], 'raw' ),
-			);
+			$last_course_progressed = get_post_field( 'post_title', $args['course_id'], 'raw' );
+
+			if ( $last_course_progressed !== $previous_last_course_progressed ) {
+				$update_data['ld_last_course_progressed'] = $last_course_progressed;
+				update_user_meta( $args['user_id'], 'ld_last_course_progressed', $last_course_progressed );
+			}
 
 			$progress = learndash_course_progress(
 				array(
@@ -612,7 +614,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 		if ( 'ld_course_steps' === $meta_key && learndash_is_course_shared_steps_enabled() ) { // only works with shared course steps.
 
-			if ( is_admin() || wpf_admin_override() || wp_doing_cron() ) {
+			if ( ( is_admin() && ! wp_doing_ajax() ) || wpf_admin_override() || wp_doing_cron() ) {
 				return $value; // Don't need to do anything.
 			}
 
@@ -780,6 +782,14 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 			return $has_access; // already denied.
 		}
 
+		if ( doing_filter( 'wpf_user_can_access' ) ) {
+			return $has_access; // prevent looping.
+		}
+
+		if ( 'sfwd-courses' === get_post_type( $post_id ) ) {
+			return $has_access; // only filter lessons and topics.
+		}
+
 		$course_id = learndash_get_course_id( $post_id );
 		$settings  = get_post_meta( $course_id, 'wpf-settings-learndash', true );
 
@@ -865,8 +875,9 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		}
 
 		if ( ! empty( $settings['step_display'] ) && 'lock_lessons' === $settings['step_display'] ) {
-			if ( ! wpf_user_can_access( $id ) ) {
-				$class .= ' learndash-not-available';
+			if ( ! wpf_user_can_access( $id ) && empty( wp_fusion()->access->get_post_access_meta( $id )['redirect'] ) ) {
+				$class .= ' wp-fusion-locked';
+				$this->locking_lessons = true;
 			}
 		}
 
@@ -936,6 +947,10 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 					'class' => 'ld-status-locked ld-primary-color',
 				);
 
+				if ( function_exists( 'buddyboss_theme_get_option' ) ) {
+					$attribute['icon'] = 'ld-icon-calendar';
+				}
+
 				// Classes can be ld-status-complete, ld-status-waiting, ld-status-unlocked, ld-status-incomplete
 				// Icons can be any of the ld-icon-* classes, for example ld-icon-calendar.
 
@@ -945,6 +960,29 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		}
 
 		return $attributes;
+	}
+
+	/**
+	 * Outputs inline styles to prevent clicking on locked lessons.
+	 *
+	 * @since 3.41.17
+	 */
+	public function add_inline_lesson_locked_styles() {
+
+		if ( $this->locking_lessons ) {
+
+			echo '<style> /* Added by WP Fusion, to prevent clicking on locked lessons */';
+			echo '.learndash-wrapper .ld-table-list .ld-table-list-items .ld-table-list-item a.wp-fusion-locked { pointer-events: none; cursor: default; }';
+			echo '.bb-learndash-content-wrap .ld-table-list .ld-table-list-items .ld-table-list-item a.wp-fusion-locked .ld-topic-title::before { content: "\eecd"; }';
+			echo '.bb-learndash-content-wrap .ld-status-locked .ld-icon-unlocked::before { content: "\eecd"; font-family: "bb-icons"; } ';
+			echo '.learndash-wrapper .ld-item-list-items .ld-item-list-item.wp-fusion-locked a { pointer-events: none; cursor: default; }';
+			echo '.learndash-wrapper .ld-item-list .ld-item-list-item.wp-fusion-locked a.ld-item-name:hover, .learndash-wrapper .ld-item-list .ld-item-list-item.wp-fusion-locked .ld-item-list-item-preview:hover a.ld-item-name .ld-item-title { color: inherit; }';
+			// BuddyBoss theme focus mode:
+			echo '.lms-lesson-content a.bb-title.bb-lms-title-wrap:has( i.bb-icon-lock ) { pointer-events: none; cursor: default; opacity: 0.6; }';
+			echo '</style>';
+
+		}
+
 	}
 
 	/**
@@ -977,7 +1015,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 	public function meta_box_notice( $post, $settings ) {
 
-		if ( 'sfwd-lessons' != $post->post_type && 'sfwd-topic' != $post->post_type && 'sfwd-quiz' != $post->post_type ) {
+		if ( 'sfwd-lessons' != $post->post_type && 'sfwd-topic' != $post->post_type ) {
 			return;
 		}
 
@@ -1043,7 +1081,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 	public function meta_box_content( $post, $settings ) {
 
-		if ( $post->post_type != 'sfwd-courses' && $post->post_type != 'sfwd-lessons' && $post->post_type != 'sfwd-topic' && $post->post_type != 'sfwd-quiz' ) {
+		if ( $post->post_type != 'sfwd-courses' && $post->post_type != 'sfwd-quiz' && $post->post_type != 'sfwd-lessons' && $post->post_type != 'sfwd-topic' ) {
 			return;
 		}
 
@@ -1065,68 +1103,22 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 			$settings['final_points_field'] = array( 'crm_field' => false );
 		}
 
-		echo '<p><label for="wpf-apply-tags-ld"><small>';
+		if ( 'sfwd-quiz' !== $post->post_type ) {
 
-		if ( 'sfwd-quiz' === $post->post_type ) {
-			_e( 'Apply these tags when quiz passed', 'wp-fusion' ); // quizzes.
-		} else {
-			_e( 'Apply these tags when marked complete', 'wp-fusion' ); // everything else.
-		}
+			echo '<p><label for="wpf-apply-tags-ld"><small>';
 
-		echo ':</small></label>';
-
-		wpf_render_tag_multiselect(
-			array(
-				'setting'   => $settings['apply_tags_ld'],
-				'meta_name' => 'wpf-settings',
-				'field_id'  => 'apply_tags_ld',
-			)
-		);
-
-		echo '</p>';
-
-		if ( 'sfwd-quiz' == $post->post_type ) {
-
-			echo '<p><label for="wpf-apply-tags-ld-quiz-fail"><small>' . __( 'Apply these tags when essay submitted', 'wp-fusion' ) . ':</small></label>';
+			echo 'Apply these tags when marked complete:</small></label>';
 
 			wpf_render_tag_multiselect(
 				array(
-					'setting'   => $settings['apply_tags_ld_essay_submitted'],
+					'setting'   => $settings['apply_tags_ld'],
 					'meta_name' => 'wpf-settings',
-					'field_id'  => 'apply_tags_ld_essay_submitted',
+					'field_id'  => 'apply_tags_ld',
 				)
 			);
 
 			echo '</p>';
-
-			echo '<p><label for="wpf-apply-tags-ld-quiz-fail"><small>' . __( 'Apply these tags when quiz failed', 'wp-fusion' ) . ':</small></label>';
-
-			wpf_render_tag_multiselect(
-				array(
-					'setting'   => $settings['apply_tags_ld_quiz_fail'],
-					'meta_name' => 'wpf-settings',
-					'field_id'  => 'apply_tags_ld_quiz_fail',
-				)
-			);
-
-			echo '</p>';
-
-			// Add final score field
-			echo '<p><label for="final_score_field"><small>' . sprintf( __( 'Sync final score for this quiz to a custom field in %s', 'wp-fusion' ), wp_fusion()->crm->name ) . ':</small></label>';
-
-			wpf_render_crm_field_select( $settings['final_score_field']['crm_field'], 'wpf-settings', 'final_score_field' );
-
-			echo '</p>';
-
-			// Add final points field
-			echo '<p><label for="final_score_field"><small>' . sprintf( __( 'Sync final points for this quiz to a custom field in %s', 'wp-fusion' ), wp_fusion()->crm->name ) . ':</small></label>';
-
-			wpf_render_crm_field_select( $settings['final_points_field']['crm_field'], 'wpf-settings', 'final_points_field' );
-
-			echo '</p>';
-
 		}
-
 	}
 
 
@@ -1139,9 +1131,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 	public function add_meta_box( $post_id, $data ) {
 
-		$admin_permissions = wpf_get_option( 'admin_permissions' );
-
-		if ( true == $admin_permissions && ! current_user_can( 'manage_options' ) ) {
+		if ( wpf_get_option( 'admin_permissions' ) && ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
 		add_meta_box( 'wpf-learndash-meta', __( 'WP Fusion - Question Settings', 'wp-fusion' ), array( $this, 'meta_box_callback_question' ), 'sfwd-question' );
@@ -1159,17 +1149,28 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	public function add_metabox_tab( $tabs ) {
 		$screen = get_current_screen();
 
-		if ( 'sfwd-courses' !== $screen->id ) {
+		if ( 'sfwd-courses' !== $screen->id && 'sfwd-quiz' !== $screen->id ) {
 			return $tabs;
 		}
-
-		if ( ( isset( $_GET['post'] ) && isset( $_GET['action'] ) ) || isset( $_GET['post_type'] ) && $_GET['post_type'] === 'sfwd-courses' ) {
-			$tabs[] = array(
-				'id'                  => 'wp-fusion-settings',
-				'name'                => __( 'WP Fusion', 'wp-fusion' ),
-				'metaboxes'           => array( 'learndash-course-wpf' ),
-				'showDocumentSidebar' => 'false',
-			);
+		if ( 'sfwd-courses' === $screen->id ) {
+			if ( ( isset( $_GET['post'] ) && isset( $_GET['action'] ) ) || isset( $_GET['post_type'] ) && $_GET['post_type'] === 'sfwd-courses' ) {
+				$tabs[] = array(
+					'id'                  => 'wp-fusion-settings',
+					'name'                => __( 'WP Fusion', 'wp-fusion' ),
+					'metaboxes'           => array( 'learndash-course-wpf' ),
+					'showDocumentSidebar' => 'false',
+				);
+			}
+		}
+		if ( 'sfwd-quiz' === $screen->id ) {
+			if ( ( isset( $_GET['post'] ) && isset( $_GET['action'] ) ) || isset( $_GET['post_type'] ) && $_GET['post_type'] === 'sfwd-quiz' ) {
+				$tabs[] = array(
+					'id'                  => 'wp-fusion-settings',
+					'name'                => __( 'WP Fusion', 'wp-fusion' ),
+					'metaboxes'           => array( 'learndash-quiz-wpf' ),
+					'showDocumentSidebar' => 'false',
+				);
+			}
 		}
 		return $tabs;
 	}
@@ -1181,6 +1182,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	 */
 	public function register_metabox() {
 		require_once WPF_DIR_PATH . 'includes/integrations/class-learndash-metabox-course-settings.php';
+		require_once WPF_DIR_PATH . 'includes/integrations/class-learndash-metabox-quiz-settings.php';
 	}
 
 	/**
@@ -1193,17 +1195,18 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	 */
 	public function display_crm_field_dropdown( $field_args ) {
 
-		$key = 'course_' . str_replace( '_field', '', $field_args['name'] ) . '_' . get_the_ID();
-
-		wpf_render_crm_field_select( wpf_get_crm_field( $key ), 'wpf-settings-learndash', $field_args['name'] );
+		wpf_render_crm_field_select(
+			wpf_get_crm_field( $field_args['name'] ), // saved value.
+			'wpf-settings-learndash', // option name.
+			$field_args['name'] // field name.
+		);
 
 		echo '<p style="margin-top:5px;" class="description">' . esc_html( $field_args['desc'] ) . '</p>';
-
 	}
 
 	/**
 	 * Display tags select input for assignment upload setting
-	 *
+	 * display_wpf_delay_select
 	 * @access public
 	 * @return mixed HTML output
 	 */
@@ -1212,11 +1215,10 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 		global $post;
 
-		$settings = get_post_meta( $post->ID, 'wpf-settings-learndash', true );
-
-		if ( empty( $settings ) ) {
-			$settings = array();
-		}
+		// pre 3.41.35, the quiz tags were stored in the generic wpf-settings, not wpf-settings-learndash.
+		$old_settings = (array) get_post_meta( $post->ID, 'wpf-settings', true );
+		$settings     = (array) get_post_meta( $post->ID, 'wpf-settings-learndash', true );
+		$settings     = array_merge( $old_settings, $settings );
 
 		if ( ! isset( $settings[ $field_args['name'] ] ) ) {
 			$settings[ $field_args['name'] ] = array();
@@ -1241,7 +1243,32 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		wpf_render_tag_multiselect( $args );
 
 		echo '<p style="margin-top:5px;" class="description">' . $field_args['desc'] . '</p>';
+	}
 
+	/**
+	 * Display tags select input for assignment upload setting
+	 *
+	 * @access public
+	 * @return mixed HTML output
+	 */
+
+	public function display_wpf_delay_select( $field_args ) {
+
+		global $post;
+
+		$settings = get_post_meta( $post->ID, 'wpf-settings-learndash', true );
+
+		if ( empty( $settings ) ) {
+			$settings = array();
+		}
+
+		if ( ! isset( $settings[ $field_args['name'] ] ) ) {
+			$settings[ $field_args['name'] ] = array();
+		}
+
+		echo '<input type="text" id="wpf-apply-delay" name="wpf-settings[apply_delay]" value="' . (int) $settings['apply_delay'] . '" size="41" />';
+		echo '<p class="wpf-apply-tags-delay-input"><label for="wpf-apply-delay">' . $field_args['desc'] . '</label>';
+		echo '</p>';
 	}
 
 	/**
@@ -1281,6 +1308,105 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 	}
 
+	/**
+	 * Quiz Settings Fields
+	 * Registers LD quiz fields in the WP Fusion admin tab.
+	 *
+	 * @since 3.41.35 Added support for dynamic category fields.
+	 *
+	 * @param array $fields      Fields.
+	 * @param array $metabox_key Metabox key.
+	 *
+	 * @return array Fields
+	 */
+	public function quiz_settings_fields( $fields, $metabox_key ) {
+
+		if ( wpf_get_option( 'admin_permissions' ) && ! current_user_can( 'manage_options' ) ) {
+			return $fields;
+		}
+
+		$settings = array(
+			'apply_tags_ld_essay_submitted' => array(),
+			'apply_tags_ld_quiz_fail'       => array(),
+		);
+
+		$categories = array();
+
+		global $post;
+
+		if ( is_object( $post ) ) {
+
+			$settings = wp_parse_args( get_post_meta( $post->ID, 'wpf-settings-learndash', true ), $settings );
+
+			$category_mapper = new WpProQuiz_Model_CategoryMapper();
+			$quiz_id         = (int) learndash_get_setting( $post->ID, 'quiz_pro' );
+			$categories      = $category_mapper->fetchByQuiz( $quiz_id );
+
+		}
+
+		$new_options = array(
+			'apply_tags_ld_essay_submitted' => array(
+				'name'             => 'apply_tags_ld_essay_submitted',
+				'label'            => __( 'Apply Tags When Essay Submitted', 'wp-fusion' ),
+				'type'             => 'multiselect',
+				'multiple'         => 'true',
+				'display_callback' => array( $this, 'display_wpf_tags_select' ),
+				'desc'             => sprintf( __( 'These tags will be applied in %s when someone submits an essay.', 'wp-fusion' ), wp_fusion()->crm->name ),
+				'help_text'        => sprintf( __( 'For more information on these settings, %1$ssee our documentation%2$s.', 'wp-fusion' ), '<a href="https://wpfusion.com/documentation/learning-management/learndash/#course-specific-settings" target="_blank">', '</a>' ),
+			),
+			'apply_tags_ld' => array(
+				'name'             => 'apply_tags_ld',
+				'label'            => __( 'Apply Tags When Quiz Passed', 'wp-fusion' ),
+				'type'             => 'multiselect',
+				'multiple'         => 'true',
+				'display_callback' => array( $this, 'display_wpf_tags_select' ),
+				'desc'             => sprintf( __( 'This tag will be applied in %1$s when someone passes this quiz.', 'wp-fusion' ), wp_fusion()->crm->name, wp_fusion()->crm->name ),
+				'help_text'        => sprintf( __( 'For more information on these settings, %1$ssee our documentation%2$s.', 'wp-fusion' ), '<a href="https://wpfusion.com/documentation/learning-management/learndash/#course-specific-settings" target="_blank">', '</a>' ),
+			),
+			'apply_tags_ld_quiz_fail' => array(
+				'name'             => 'apply_tags_ld_quiz_fail',
+				'label'            => __( 'Apply Tags When Quiz Failed', 'wp-fusion' ),
+				'type'             => 'multiselect',
+				'multiple'         => 'true',
+				'display_callback' => array( $this, 'display_wpf_tags_select' ),
+				'desc'             => sprintf( __( 'This tag will be applied in %1$s when someone fails this quiz.', 'wp-fusion' ), wp_fusion()->crm->name, wp_fusion()->crm->name ),
+				'help_text'        => sprintf( __( 'For more information on these settings, %1$ssee our documentation%2$s.', 'wp-fusion' ), '<a href="https://wpfusion.com/documentation/learning-management/learndash/#course-specific-settings" target="_blank">', '</a>' ),
+			),
+			'final_score_field'    => array(
+				'name'             => "quiz_final_score_{$post->ID}",
+				'label'            => __( 'Field - Final Score', 'wp-fusion' ),
+				'type'             => 'select',
+				'display_callback' => array( $this, 'display_crm_field_dropdown' ),
+				'desc'             => sprintf( __( 'Sync the final score for this quiz to a custom field in %s', 'wp-fusion' ), wp_fusion()->crm->name )
+			),
+			'final_points_field'   => array(
+				'name'             => "quiz_final_points_{$post->ID}",
+				'label'            => __( 'Field - Final Points', 'wp-fusion' ),
+				'type'             => 'select',
+				'display_callback' => array( $this, 'display_crm_field_dropdown' ),
+				'desc'             => sprintf( __( 'Sync the final points for this quiz to a custom field in %s', 'wp-fusion' ), wp_fusion()->crm->name ),
+			),
+		);
+
+		// Add category score fields options.
+		foreach ( $categories as $category ) {
+
+			$category_id = $category->getCategoryId();
+
+			if ( ! empty( $category_id ) ) {
+				$new_options[ 'category_score_field_' . $category_id ] = array(
+					'name'             => "quiz_category_score_{$post->ID}_{$category_id}",
+					'label'            => sprintf( __( 'Field - %s Score', 'wp-fusion' ), $category->getCategoryName() ),
+					'type'             => 'select',
+					'display_callback' => array( $this, 'display_crm_field_dropdown' ),
+					'desc'             => sprintf( __( 'Sync the final points for the category %s to the selected custom field in %s.', 'wp-fusion' ), $category->getCategoryName(), wp_fusion()->crm->name ),
+				);
+			}
+		}
+
+		$fields = wp_fusion()->settings->insert_setting_after( 'quiz_access_list', $fields, $new_options );
+		return $fields;
+	}
 
 	/**
 	 * Registers LD course fields
@@ -1290,9 +1416,8 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	 */
 
 	public function course_settings_fields( $fields, $metabox_key ) {
-		$admin_permissions = wpf_get_option( 'admin_permissions' );
 
-		if ( true == $admin_permissions && ! current_user_can( 'manage_options' ) ) {
+		if ( wpf_get_option( 'admin_permissions' ) && ! current_user_can( 'manage_options' ) ) {
 			return $fields;
 		}
 
@@ -1401,21 +1526,21 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 				),
 			),
 			'progress_field'      => array(
-				'name'             => 'progress_field',
+				'name'             => "course_progress_{$post->ID}",
 				'label'            => __( 'Field - Course Progress', 'wp-fusion' ),
 				'type'             => 'select',
 				'display_callback' => array( $this, 'display_crm_field_dropdown' ),
 				'desc'             => sprintf( __( 'As the user progresses through the course, their course completion percentage will be synced to the selected custom field in %s.', 'wp-fusion' ), wp_fusion()->crm->name ),
 			),
 			'enrollment_field'     => array(
-				'name'             => 'enrollment_field',
+				'name'             => "course_enrollment_{$post->ID}",
 				'label'            => __( 'Field - Course Enrollment Date', 'wp-fusion' ),
 				'type'             => 'select',
 				'display_callback' => array( $this, 'display_crm_field_dropdown' ),
 				'desc'             => sprintf( __( 'When the user enrolls in the course, the date will be synced to the selected custom field in %s.', 'wp-fusion' ), wp_fusion()->crm->name ),
 			),
 			'enrollment_expiry_field'     => array(
-				'name'             => 'enrollment_expiry_field',
+				'name'             => "course_enrollment_expiry_{$post->ID}",
 				'label'            => __( 'Field - Course Enrollment Expiration Date', 'wp-fusion' ),
 				'type'             => 'select',
 				'display_callback' => array( $this, 'display_crm_field_dropdown' ),
@@ -1470,7 +1595,6 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		$fields = wp_fusion()->settings->insert_setting_after( 'course_access_list', $fields, $new_options );
 
 		return $fields;
-
 	}
 
 
@@ -1486,9 +1610,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 		if ( 'learndash-group-access-settings' == $metabox_key ) {
 
-			$admin_permissions = wpf_get_option( 'admin_permissions' );
-
-			if ( true == $admin_permissions && ! current_user_can( 'manage_options' ) ) {
+			if ( wpf_get_option( 'admin_permissions' ) && ! current_user_can( 'manage_options' ) ) {
 				return $fields;
 			}
 
@@ -1612,18 +1734,21 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Runs when WPF meta box is saved on a course, lesson, or question
+	 * Save Meta Box Data
+	 * Runs when WPF meta box is saved on a course, quiz, lesson, or question.
 	 *
-	 * @access public
-	 * @return void
+	 * @since 3.41.35
+	 *
+	 * @param int    $post_id Post ID.
+	 * @param object $post Post object.
 	 */
 	public function save_meta_box_data( $post_id, $post ) {
 
-		if ( ! in_array( $post->post_type, array( 'sfwd-courses', 'groups', 'sfwd-question', 'sfwd-topic', 'sfwd-lessons' ) ) ) {
+		if ( ! in_array( $post->post_type, array( 'sfwd-courses', 'sfwd-quiz', 'groups', 'sfwd-question', 'sfwd-topic', 'sfwd-lessons' ) ) ) {
 			return;
 		}
 
-		// As of LD 3.2.2 this runs on every lesson in the builder when the course is saved, so we'll check for that here to avoid having the lesson settings overwritten by the course
+		// As of LD 3.2.2 this runs on every lesson in the builder when the course is saved, so we'll check for that here to avoid having the lesson settings overwritten by the course.
 		if ( isset( $_POST['post_ID'] ) && $_POST['post_ID'] != $post_id ) {
 			return;
 		}
@@ -1639,8 +1764,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 			$data = $_POST['wpf-settings-learndash'];
 		}
 
-		// Some special course fields.
-
+		// Some special fields.
 		if ( ! empty( $_POST['learndash-course-wpf'] ) ) {
 
 			if ( isset( $_POST['learndash-course-wpf']['step_display'] ) ) {
@@ -1653,6 +1777,12 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 				unset( $_POST['learndash-course-wpf']['lesson_locked_text'] );
 			}
 		}
+		if ( array_key_exists( 'wpf-settings', $_POST ) ) {
+			if ( ! empty( $_POST['wpf-settings'] && ! empty( $_POST['wpf-settings']['apply_delay'] ) ) ) {
+				$data['apply_delay'] = $_POST['wpf-settings']['apply_delay'];
+				unset( $_POST['wpf-settings']['apply_delay'] );
+			}
+		}
 
 		if ( ! empty( $data ) ) {
 
@@ -1663,17 +1793,45 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 			$contact_fields = wpf_get_option( 'contact_fields', array() );
 
-			$fields = array( 'progress_field', 'enrollment_field', 'enrollment_expiry_field' );
+			// Course and quiz progress fields.
+
+			$fields = array( "quiz_final_score_{$post_id}", "quiz_final_points_{$post_id}", "course_progress_{$post_id}", "course_enrollment_{$post_id}", "course_enrollment_expiry_{$post_id}" );
 
 			foreach ( $fields as $field ) {
 
-				// i.e. course_progress_123.
-				$key = 'course_' . str_replace( '_field', '', $field ) . '_' . $post_id;
-
-				if ( ! empty( $data[ $field ]['crm_field'] ) ) {
+				if ( isset( $data[ $field ] ) && ! empty( $data[ $field ]['crm_field'] ) ) {
 
 					// Also copy to the main settings.
-					$contact_fields[ $key ]['crm_field'] = $data[ $field ]['crm_field'];
+					$contact_fields[ $field ]['crm_field'] = $data[ $field ]['crm_field'];
+					$contact_fields[ $field ]['active']    = true;
+
+				} elseif ( isset( $contact_fields[ $field ] ) ) {
+
+					unset( $contact_fields[ $field ] );
+
+				}
+			}
+
+			// Quiz category scores. We need to use the Learndash Category Mapper here to get
+			// the categories.
+
+			$category_mapper = new WpProQuiz_Model_CategoryMapper();
+			$quiz_id         = (int) learndash_get_setting( $post_id, 'quiz_pro' );
+			$categories      = $category_mapper->fetchByQuiz( $quiz_id );
+
+			$field = 'category_score_field_';
+
+			foreach ( $categories as $category ) {
+
+				$category_id = $category->getCategoryId();
+
+				// i.e. quiz_category_score_123_1.
+				$key = "quiz_category_score_{$post_id}_{$category_id}";
+
+				if ( ! empty( $data[ $key ]['crm_field'] ) ) {
+
+					// Also copy to the main settings.
+					$contact_fields[ $key ]['crm_field'] = $data[ $key ]['crm_field'];
 					$contact_fields[ $key ]['active']    = true;
 
 				} elseif ( isset( $contact_fields[ $key ] ) ) {
@@ -2046,9 +2204,25 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 		$course_id = learndash_get_course_id( $lesson_id );
 
-		if ( ! wp_fusion()->access->user_can_access( $course_id ) ) {
+		if ( ! wpf_user_can_access( $course_id ) ) {
+
+			// Courses.
 
 			$redirect = wp_fusion()->access->get_redirect( $course_id );
+
+			if ( ! empty( $redirect ) ) {
+
+				wp_fusion()->access->set_return_after_login( $lesson_id );
+
+				wp_redirect( $redirect, 302, 'WP Fusion; Post ID ' . $lesson_id );
+				exit();
+
+			}
+		} elseif ( ! wpf_user_can_access( $lesson_id ) ) {
+
+			// Lessons.
+
+			$redirect = wp_fusion()->access->get_redirect( $lesson_id );
 
 			if ( ! empty( $redirect ) ) {
 
@@ -2290,8 +2464,37 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 	}
 
+
 	/**
-	 * Adds randomly generates passwords to POST data so it can be picked up by user_register()
+	 * Essay Submitted.
+	 *
+	 * Applies tags when a user submits an essay.
+	 *
+	 * @since 3.41.36
+	 *
+	 * @param int   $essay_id   The essay ID.
+	 * @param array $essay_args The essay args.
+	 */
+	public function essay_submitted( $essay_id, $essay_args ) {
+
+		$quiz_id  = get_post_meta( $essay_id, 'quiz_post_id', true );
+		$user_id  = $essay_args['post_author'];
+		$settings = get_post_meta( $quiz_id, 'wpf-settings-learndash', true );
+
+		if ( ! empty( $settings ) && ! empty( $settings['apply_tags_ld_essay_submitted'] ) ) {
+
+			$message = 'User submitted essay for Learndash Quiz <a href="' . admin_url( 'post.php?post=' . $quiz_id . '&action=edit' ) . '" target="_blank">' . get_the_title( $quiz_id ) . '</a>';
+
+			wpf_log( 'info', $user_id, $message . '. Applying tags.' );
+
+			wp_fusion()->user->apply_tags( $settings['apply_tags_ld_essay_submitted'] );
+
+		}
+
+	}
+
+	/**
+	 * Adds randomly generated passwords to POST data so it can be picked up by user_register().
 	 *
 	 * @access public
 	 * @return string Password
@@ -2356,6 +2559,51 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	}
 
 	/**
+	 * Student Parent Access.
+	 *
+	 * Syncs the parent email to the child's account in the CRM when a child account is created.
+	 *
+	 * @since 3.41.36
+	 *
+	 * @param array $post_data The $_POST data.
+	 * @return array The post data.
+	 */
+	public function sync_student_parent_access( $post_data ) {
+
+		if ( isset( $_POST['ld-submit-no-email-account-button'] ) ) {
+
+			// The parent email is the email of the current user who submitted the form.
+			$post_data['ldap_parent_email'] = wpf_get_current_user_email();
+
+		}
+
+		return $post_data;
+
+	}
+
+	/**
+	 * Student Parent Access.
+	 *
+	 * Syncs the parent email to the child's account in the CRM when a child account is linked.
+	 *
+	 * @since 3.41.36
+	 */
+	public function sync_student_parent_access_linked() {
+
+		if ( isset( $_POST['ld-submit-links-button'] ) ) {
+
+			$email = sanitize_email( $_POST['link_child_email'] );
+			$user  = get_user_by( 'email', $email );
+
+			$update_data = array( 'ldap_parent_email' => wpf_get_current_user_email() );
+
+			wp_fusion()->user->push_user_meta( $user->ID, $update_data );
+
+		}
+
+	}
+
+	/**
 	 * Adds LearnDash field group to meta fields list
 	 *
 	 * @access  public
@@ -2365,7 +2613,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	public function add_meta_field_group( $field_groups ) {
 
 		$field_groups['learndash_progress'] = array(
-			'title'  => 'LearnDash Progress',
+			'title'  => 'LearnDash',
 			'fields' => array(),
 		);
 
@@ -2375,12 +2623,14 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 
 	/**
-	 * Adds LearnDash meta fields to WPF contact fields list
+	 * Prepare Meta Fields.
 	 *
-	 * @access  public
+	 * Adds LearnDash meta fields to WPF contact fields list.
+	 *
+	 * @param array $meta_fields Meta Fields.
+	 *
 	 * @return  array Meta Fields
 	 */
-
 	public function prepare_meta_fields( $meta_fields ) {
 
 		$meta_fields['ld_last_course_enrolled'] = array(
@@ -2432,9 +2682,20 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 			'pseudo' => true,
 		);
 
+		// HonorsWP Student - Parent Access compatibility.
+
+		if ( class_exists( 'Learndash_Access_For_Parents' ) ) {
+			$meta_fields['ldap_parent_email'] = array(
+				'label'  => 'Parent Email',
+				'type'   => 'text',
+				'group'  => 'learndash_progress',
+				'pseudo' => true,
+			);
+		}
+
 		// Course progress fields.
 
-		$course_fields = array(
+		$fields = array(
 			'course_progress'          => array(
 				'name' => __( 'Progress', 'wp-fusion' ),
 				'type' => 'int',
@@ -2447,13 +2708,25 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 				'name' => __( 'Enrollment Expiry Date', 'wp-fusion' ),
 				'type' => 'date',
 			),
+			'quiz_final_score' => array(
+				'name' => __( 'Quiz Final Score', 'wp-fusion' ),
+				'type' => 'int',
+			),
+			'quiz_final_points' => array(
+				'name' => __( 'Quiz Final Points', 'wp-fusion' ),
+				'type' => 'int',
+			),
+			'quiz_category_score' => array(
+				'name' => __( 'Quiz Category Score', 'wp-fusion' ),
+				'type' => 'int',
+			),
 		);
 
 		$contact_fields = wpf_get_option( 'contact_fields', array() );
 
 		foreach ( $contact_fields as $key => $value ) {
 
-			foreach ( $course_fields as $crm_key => $crm_value ) {
+			foreach ( $fields as $crm_key => $crm_value ) {
 
 				if ( false !== strpos( $key, $crm_key . '_' ) ) {
 
@@ -2469,9 +2742,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		}
 
 		return $meta_fields;
-
 	}
-
 
 	/**
 	 * //
@@ -2643,12 +2914,6 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 	 */
 	public function batch_step_progress_meta( $user_id ) {
 
-		$enrolled_courses = learndash_user_get_enrolled_courses( $user_id, array() );
-
-		if ( empty( $enrolled_courses ) ) {
-			return;
-		}
-
 		global $wpdb;
 
 		// Last course enrolled.
@@ -2667,7 +2932,7 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 		$ld_last_course_completed = $wpdb->get_row( $wpdb->prepare( 'SELECT course_id,activity_completed FROM ' . esc_sql( LDLMS_DB::get_table_name( 'user_activity' ) ) . ' WHERE user_id=%d AND activity_type=%s ORDER BY activity_completed DESC LIMIT 1', $user_id, 'course' ), ARRAY_A );
 
 		// Enrollment Date.
-		$ld_course_enrollment_date = $wpdb->get_var( $wpdb->prepare( 'SELECT activity_started FROM ' . esc_sql( LDLMS_DB::get_table_name( 'user_activity' ) ) . ' WHERE user_id=%d AND activity_type=%s ORDER BY activity_started ASC LIMIT 1', $user_id, 'access' ) );
+		// $ld_course_enrollment_date = $wpdb->get_var( $wpdb->prepare( 'SELECT activity_started FROM ' . esc_sql( LDLMS_DB::get_table_name( 'user_activity' ) ) . ' WHERE user_id=%d AND activity_type=%s ORDER BY activity_started ASC LIMIT 1', $user_id, 'access' ) );
 
 		$update_data = array(
 			'ld_last_course_completed'      => ( $ld_last_course_completed && $ld_last_course_completed['course_id'] ? get_post_field( 'post_title', $ld_last_course_completed['course_id'], 'raw' ) : '' ),
@@ -2683,43 +2948,46 @@ class WPF_LearnDash extends WPF_Integrations_Base {
 
 		// Course progress fields.
 
-		$args = array(
-			'post_type'      => 'sfwd-courses',
-			'post__in'       => $enrolled_courses,
-			'fields'         => 'ids',
-			'posts_per_page' => 100,
-			'meta_query'     => array(
-				array(
-					'key'     => 'wpf-settings-learndash',
-					'compare' => 'EXISTS',
-				),
-			),
-		);
+		$user_course_progress = get_user_meta( $user_id, '_sfwd-course_progress', true );
 
-		$courses = get_posts( $args );
+		if ( ! empty( $user_course_progress ) ) {
 
-		foreach ( $courses as $course_id ) {
+			foreach ( $user_course_progress as $course_id => $course_progress ) {
 
-			$update_data[ "course_enrollment_{$course_id}" ]        = gmdate( wpf_get_datetime_format(), ld_course_access_from( $course_id, $user_id ) );
-			$update_data[ "course_enrollment_expiry_{$course_id}" ] = gmdate( wpf_get_datetime_format(), ld_course_access_expires_on( $course_id, $user_id ) );
+				if ( ! empty( ld_course_access_from( $course_id, $user_id ) ) ) {
+					$update_data[ "course_enrollment_{$course_id}" ] = gmdate( wpf_get_datetime_format(), ld_course_access_from( $course_id, $user_id ) );
+				}
 
-			$progress = learndash_course_progress(
-				array(
-					'user_id'   => $user_id,
-					'course_id' => $course_id,
-					'array'     => true,
-				)
-			);
+				if ( ! empty( ld_course_access_expires_on( $course_id, $user_id ) ) ) {
+					$update_data[ "course_enrollment_expiry_{$course_id}" ] = gmdate( wpf_get_datetime_format(), ld_course_access_expires_on( $course_id, $user_id ) );
+				}
 
-			if ( ! empty( $progress ) && ! empty( $progress['percentage'] ) ) {
-				$update_data[ "course_progress_{$course_id}" ] = $progress['percentage'];
+				if ( isset( $course_progress['completed'] ) ) {
+					$completed = absint( $course_progress['completed'] );
+				}
+
+				if ( isset( $course_progress['total'] ) ) {
+					$total = absint( $course_progress['total'] );
+				}
+
+				if ( ( isset( $course_progress['status'] ) ) && ( 'completed' === $course_progress['status'] ) ) {
+					$completed = $total;
+				}
+
+				if ( $total > 0 ) {
+					$percentage = intval( $completed * 100 / $total );
+					$percentage = ( $percentage > 100 ) ? 100 : $percentage;
+				} else {
+					$percentage = 0;
+				}
+
+				$update_data[ "course_progress_{$course_id}" ] = $percentage;
+
 			}
 		}
 
 		wp_fusion()->user->push_user_meta( $user_id, $update_data );
-
 	}
-
 }
 
 new WPF_LearnDash();

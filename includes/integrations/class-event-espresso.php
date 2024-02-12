@@ -83,19 +83,57 @@ class WPF_Event_Espresso extends WPF_Integrations_Base {
 		// Maybe only run on first registration if syncing attendees is disabled
 
 		if ( ! $registration->is_primary_registrant() && isset( $settings['add_attendees'] ) && ! isset( $settings['add_attendees'][ $ticket_id ] ) ) {
+			// mark it complete so it doesn't show for export.
+			$registration->update_extra_meta( 'wpf_complete', current_time( 'Y-m-d H:i:s' ) );
+			return;
+		}
+
+		try {
+			$event = $registration->event();
+		} catch ( EventEspresso\core\exceptions\EntityNotFoundException $e ) {
+			// Event has been deleted.
 			return;
 		}
 
 		$event       = $registration->event();
 		$ticket      = $registration->ticket();
-		$attendee    = $registration->attendee();
 		$event_title = get_the_title( $event_id );
 
 		//
-		// Attendee data
+		// Start with the primary attendee data.
 		//
 
-		$update_data = array();
+		$update_data          = array();
+		$primary_registration = $registration->get_primary_registration();
+		$attendee             = $primary_registration->attendee();
+
+		if ( ! empty( $attendee ) ) {
+
+			$attendee_data = array(
+				'ee_fname'    => $attendee->fname(),
+				'ee_lname'    => $attendee->lname(),
+				'ee_email'    => $attendee->email(),
+				'ee_address'  => $attendee->address(),
+				'ee_address2' => $attendee->address2(),
+				'ee_city'     => $attendee->city(),
+				'ee_country'  => $attendee->country(),
+				'ee_state'    => $attendee->state(),
+				'ee_zip'      => $attendee->zip(),
+				'ee_phone'    => $attendee->phone(),
+				'first_name'  => $attendee->fname(),
+				'last_name'   => $attendee->lname(),
+				'user_email'  => $attendee->email(),
+			);
+
+			$update_data = array_merge( $update_data, $attendee_data );
+
+		}
+
+		//
+		// Current attendee data.
+		//
+
+		$attendee = $registration->attendee();
 
 		if ( ! empty( $attendee ) ) {
 
@@ -156,8 +194,11 @@ class WPF_Event_Espresso extends WPF_Integrations_Base {
 			}
 		}
 
-		// Custom fields
-		$answers = $registration->answers();
+		//
+		// Custom fields. Start with the primary attendee data.
+		//
+
+		$answers = $primary_registration->answers();
 
 		if ( ! empty( $answers ) ) {
 
@@ -165,6 +206,20 @@ class WPF_Event_Espresso extends WPF_Integrations_Base {
 
 				$update_data[ 'ee_' . $answer->question_ID() ] = $answer->value();
 
+			}
+		}
+
+		// Custom fields. Current attendee.
+
+		$answers = $registration->answers();
+
+		if ( ! empty( $answers ) ) {
+
+			foreach ( $answers as $answer ) {
+
+				if ( ! empty( $answer->value() ) ) {
+					$update_data[ 'ee_' . $answer->question_ID() ] = $answer->value();
+				}
 			}
 		}
 
@@ -211,7 +266,7 @@ class WPF_Event_Espresso extends WPF_Integrations_Base {
 
 			// Logged in checkouts. Only sync meta on Pending, don't need to do it again once approved (unless we're doing an export)
 
-			if ( EEM_Registration::status_id_pending_payment == $new_status_id || false == $old_status_id ) {
+			if ( EEM_Registration::status_id_pending_payment == $new_status_id || false == $old_status_id || wpf_is_field_active( 'ee_registration_status' ) ) {
 				wp_fusion()->user->push_user_meta( $user->ID, $update_data );
 			}
 
@@ -237,9 +292,9 @@ class WPF_Event_Espresso extends WPF_Integrations_Base {
 
 			}
 
-			if ( EEM_Registration::status_id_pending_payment == $new_status_id || false == $old_status_id ) {
+			if ( EEM_Registration::status_id_pending_payment == $new_status_id || false == $old_status_id || wpf_is_field_active( 'ee_registration_status' ) ) {
 
-				// Only create a contact / sync meta on Pending, don't need to do it again once approved (unless we're doing an export)
+				// Only create a contact / sync meta on Pending, don't need to do it again once approved (unless we're doing an export or registration status is enabled for sync).
 
 				wpf_log(
 					'info',
@@ -597,6 +652,10 @@ class WPF_Event_Espresso extends WPF_Integrations_Base {
 	 */
 
 	public function show_admin_settings( $ticket_row, $ticket_id ) {
+
+		if ( empty( $ticket_id ) ) {
+			return;
+		}
 
 		global $post;
 

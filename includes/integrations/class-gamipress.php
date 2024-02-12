@@ -75,15 +75,15 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 		add_filter( 'user_has_access_to_achievement', array( $this, 'user_has_access_to_achievement' ), 10, 6 );
 		add_filter( 'gamipress_trigger_get_user_id', array( $this, 'trigger_get_user_id' ), 10, 3 );
 
-		add_action( 'save_post', array( $this, 'save_multiselect_data' ), 20, 2 );
+		add_action( 'save_post', array( $this, 'save_multiselect_data' ), 20 );
 
 		// Settings
 		add_filter( 'gamipress_achievement_data_fields', array( $this, 'achievement_fields' ) );
 		add_filter( 'gamipress_rank_data_fields', array( $this, 'rank_fields' ) );
 		add_action( 'cmb2_render_multiselect', array( $this, 'cmb2_render_multiselect' ), 10, 5 );
 
-		// Assign / remove linked achievements
-		add_action( 'wpf_tags_modified', array( $this, 'update_linked_achievements' ), 10, 2 );
+		// Assign / remove linked achievements & tags.
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
 
 	}
 
@@ -164,7 +164,7 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 			return;
 		}
 
-		remove_action( 'wpf_tags_modified', array( $this, 'update_linked_achievements' ), 10, 2 );
+		remove_action( 'wpf_tags_modified', array( $this, 'tags_modified' ) );
 
 		if ( ! empty( $settings['wpf_apply_tags'] ) ) {
 			wp_fusion()->user->apply_tags( $settings['wpf_apply_tags'], $user_id );
@@ -174,7 +174,7 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 			wp_fusion()->user->apply_tags( $settings['wpf_tag_link'], $user_id );
 		}
 
-		add_action( 'wpf_tags_modified', array( $this, 'update_linked_achievements' ), 10, 2 );
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
 
 	}
 
@@ -196,19 +196,41 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 	}
 
 	/**
-	 * Applies tags and sync meta when a GamiPress rank is attained
+	 * Update User Rank.
+	 * Applies tags and sync meta when a GamiPress rank is attained.
 	 *
-	 * @access public
-	 * @return void
+	 * @since 3.41.46 Added link tag.
+	 *
+	 * @param int    $user_id        The user ID.
+	 * @param object $new_rank       The new rank.
+	 * @param object $old_rank       The old rank.
+	 * @param int    $admin_id       The admin ID.
+	 * @param int    $achievement_id The achievement ID.
 	 */
-
 	public function update_user_rank( $user_id, $new_rank, $old_rank, $admin_id, $achievement_id ) {
 
 		$settings = get_post_meta( $new_rank->ID, 'wpf_settings_gamipress', true );
 
-		if ( ! empty( $settings ) && ! empty( $settings['wpf_apply_tags'] ) ) {
+		remove_action( 'wpf_tags_modified', array( $this, 'tags_modified' ) );
+
+		// Apply tags.
+
+		if ( ! empty( $settings['wpf_apply_tags'] ) ) {
 			wp_fusion()->user->apply_tags( $settings['wpf_apply_tags'], $user_id );
 		}
+		if ( ! empty( $settings['wpf_tag_link'] ) ) {
+			wp_fusion()->user->apply_tags( $settings['wpf_tag_link'], $user_id );
+		}
+
+		// Remove the old link tag.
+
+		$settings = get_post_meta( $old_rank->ID, 'wpf_settings_gamipress', true );
+
+		if ( ! empty( $settings['wpf_tag_link'] ) ) {
+			wp_fusion()->user->remove_tags( $settings['wpf_tag_link'], $user_id );
+		}
+
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
 
 		$update_data = array(
 			"_gamipress_{$new_rank->post_type}_rank" => $new_rank->post_title,
@@ -313,7 +335,7 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 	 * Register the new setting on the requirement object
 	 *
 	 * @access public
-	 * @return void
+	 * @return array Requirement.
 	 */
 
 	public function requirement_object( $requirement, $requirement_id ) {
@@ -479,13 +501,18 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 
 
 	/**
-	 * Update's user achievements when tags are modified
+	 * Update User.
 	 *
-	 * @access public
-	 * @return void
+	 * Update's user achievements & tags when tags are modified.
+	 *
+	 * @since 3.41.46 Added rank support.
+	 *
+	 * @param int   $user_id   The user ID.
+	 * @param array $user_tags The user tags.
 	 */
+	public function tags_modified( $user_id, $user_tags ) {
 
-	public function update_linked_achievements( $user_id, $user_tags ) {
+		// Linked achievements.
 
 		$linked_achievements = get_posts(
 			array(
@@ -501,52 +528,88 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 			)
 		);
 
-		if ( empty( $linked_achievements ) ) {
-			return;
+		if ( ! empty( $linked_achievements ) ) {
+
+			// Prevent looping when the achievements assigned / removed
+			remove_action( 'gamipress_award_achievement', array( $this, 'user_complete_achievement' ), 10, 5 );
+			remove_action( 'gamipress_revoke_achievement_to_user', array( $this, 'user_revoke_achievement' ), 10, 3 );
+
+			// Assign / revoke linked achievements
+			foreach ( $linked_achievements as $achievement_id ) {
+
+				$settings = get_post_meta( $achievement_id, 'wpf_settings_gamipress', true );
+
+				if ( empty( $settings ) || empty( $settings['wpf_tag_link'] ) ) {
+					continue;
+				}
+
+				$tag_id = $settings['wpf_tag_link'][0];
+
+				$earned = gamipress_get_user_achievements(
+					array(
+						'user_id'        => absint( $user_id ),
+						'achievement_id' => absint( $achievement_id ),
+					)
+				);
+
+				if ( in_array( $tag_id, $user_tags ) && empty( $earned ) ) {
+
+					// Logger
+					wpf_log( 'info', $user_id, 'User granted Gamipress achivement <a href="' . get_edit_post_link( $achievement_id, '' ) . '" target="_blank">' . get_the_title( $achievement_id ) . '</a> by tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
+
+					gamipress_award_achievement_to_user( $achievement_id, $user_id );
+
+				} elseif ( ! in_array( $tag_id, $user_tags ) && ! empty( $earned ) ) {
+
+					// Logger
+					wpf_log( 'info', $user_id, 'Gamipress achievement <a href="' . get_edit_post_link( $achievement_id, '' ) . '" target="_blank">' . get_the_title( $achievement_id ) . '</a> revoked by tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
+
+					gamipress_revoke_achievement_to_user( $achievement_id, $user_id );
+
+				}
+			}
+
+			add_action( 'gamipress_award_achievement', array( $this, 'user_complete_achievement' ), 10, 5 );
+			add_action( 'gamipress_revoke_achievement_to_user', array( $this, 'user_revoke_achievement' ), 10, 3 );
 		}
 
-		// Prevent looping when the achievements assigned / removed
-		remove_action( 'gamipress_award_achievement', array( $this, 'user_complete_achievement' ), 10, 5 );
-		remove_action( 'gamipress_revoke_achievement_to_user', array( $this, 'user_revoke_achievement' ), 10, 3 );
+		// Linked ranks.
 
-		// Assign / revoke linked achievements
-		foreach ( $linked_achievements as $achievement_id ) {
+		remove_action( 'wpf_tags_modified', array( $this, 'tags_modified' ) );
 
-			$settings = get_post_meta( $achievement_id, 'wpf_settings_gamipress', true );
+		// Assign / revoke linked ranks.
+		foreach ( gamipress_get_ranks() as $key => $rank ) {
+
+			$settings = get_post_meta( $rank->ID, 'wpf_settings_gamipress', true );
 
 			if ( empty( $settings ) || empty( $settings['wpf_tag_link'] ) ) {
 				continue;
 			}
 
-			$tag_id = $settings['wpf_tag_link'][0];
+			// User rank.
+			$current_rank = gamipress_get_user_rank( $user_id, $rank->post_type );
 
-			$earned = gamipress_get_user_achievements(
-				array(
-					'user_id'        => absint( $user_id ),
-					'achievement_id' => absint( $achievement_id ),
-				)
-			);
+			if ( ! empty( $settings['wpf_tag_link'] ) ) {
 
-			if ( in_array( $tag_id, $user_tags ) && empty( $earned ) ) {
+				$tag_id = $settings['wpf_tag_link'][0];
 
-				// Logger
-				wpf_log( 'info', $user_id, 'User granted Gamipress achivement <a href="' . get_edit_post_link( $achievement_id, '' ) . '" target="_blank">' . get_the_title( $achievement_id ) . '</a> by tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
+				if ( in_array( $tag_id, $user_tags, true ) && $rank->ID !== $current_rank->ID ) {
 
-				gamipress_award_achievement_to_user( $achievement_id, $user_id );
+					wpf_log( 'info', $user_id, 'User granted Gamipress rank <a href="' . get_edit_post_link( $rank->ID, '' ) . '" target="_blank">' . get_the_title( $rank->ID ) . '</a> by linked tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
 
-			} elseif ( ! in_array( $tag_id, $user_tags ) && ! empty( $earned ) ) {
+					gamipress_award_rank_to_user( $rank->ID, $user_id );
 
-				// Logger
-				wpf_log( 'info', $user_id, 'Gamipress achievement <a href="' . get_edit_post_link( $achievement_id, '' ) . '" target="_blank">' . get_the_title( $achievement_id ) . '</a> revoked by tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
+				} elseif ( ! in_array( $tag_id, $user_tags, true ) && $rank->ID === $current_rank->ID ) {
 
-				gamipress_revoke_achievement_to_user( $achievement_id, $user_id );
+					wpf_log( 'info', $user_id, 'Gamipress rank <a href="' . get_edit_post_link( $rank->ID, '' ) . '" target="_blank">' . get_the_title( $rank->ID ) . '</a> revoked by linked tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
+					// Gamipress assigns the previous rank when a rank is revoked.
+					gamipress_revoke_rank_to_user( $user_id, $rank->ID );
 
+				}
 			}
 		}
 
-		add_action( 'gamipress_award_achievement', array( $this, 'user_complete_achievement' ), 10, 5 );
-		add_action( 'gamipress_revoke_achievement_to_user', array( $this, 'user_revoke_achievement' ), 10, 3 );
-
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
 	}
 
 
@@ -603,23 +666,23 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 		);
 
 		$fields['wpf_tag_link'] = array(
-			'name' => __( 'Link with Tag', 'gamipress' ),
+			'name' => __( 'Link with tag', 'gamipress' ),
 			'desc' => sprintf( __( 'This tag will be applied when the achievement is earned. Likewise, if this tag is applied in %s the achievement will be automatically granted. If this tag is removed, the achievement will be revoked.', 'wp-fusion' ), wp_fusion()->crm->name ),
 			'desc' => '',
 			'type' => 'multiselect',
 		);
 
 		return $fields;
-
 	}
 
 	/**
-	 * Add custom rank fields
+	 * Rank Fields.
+	 * Add custom rank fields.
 	 *
-	 * @access public
+	 * @since 3.41.46 Added link tag.
+	 * @param array $fields Fields.
 	 * @return array Fields
 	 */
-
 	public function rank_fields( $fields ) {
 
 		$fields['wpf_apply_tags'] = array(
@@ -627,9 +690,13 @@ class WPF_GamiPress extends WPF_Integrations_Base {
 			'desc' => sprintf( __( 'These tags will be applied in %s when the rank is earned.', 'wp-fusion' ), wp_fusion()->crm->name ),
 			'type' => 'multiselect',
 		);
+		$fields['wpf_tag_link']   = array(
+			'name' => __( 'Link with Ttg', 'wp-fusion' ),
+			'desc' => sprintf( __( 'This tag will be applied when the rank is earned. Likewise, if this tag is applied in %s the rank will be automatically granted. If this tag is removed, the rank will be revoked.', 'wp-fusion' ), wp_fusion()->crm->name ),
+			'type' => 'multiselect',
+		);
 
 		return $fields;
-
 	}
 
 	/**

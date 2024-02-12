@@ -56,13 +56,17 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 
 		// Batch operations.
 		add_filter( 'wpf_export_options', array( $this, 'export_options' ) );
-		add_action( 'wpf_batch_solid_affiliate_init', array( $this, 'batch_init' ) );
+		add_filter( 'wpf_batch_solid_affiliate_init', array( $this, 'batch_init' ) );
 		add_action( 'wpf_batch_solid_affiliate', array( $this, 'batch_step' ) );
 
 		// Affiliate registration from frontend.
 		add_action( 'data_model_solid_affiliate_affiliates_save', array( $this, 'affiliate_registration' ) );
+		add_action( 'solid_affiliate/Affiliate/delete', array( $this, 'affiliate_deleted' ) );
 
-		// Status change for affiliates in singualr and bluck.
+		// Tag linking.
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
+
+		// Status change for affiliates in singular and bluck.
 		add_action( 'solid_affiliate/Affiliate/update', array( $this, 'affiliate_status_change' ), 10, 2 );
 
 		if ( is_admin() ) {
@@ -70,16 +74,136 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 			// Affiliate registration from dashboard.
 			$this->admin_affiliate_registration();
 		}
-
 	}
 
 	/**
+	 * Tags Modified
+	 * Triggered when tags are modified.
+	 * Used to link tags to affiliate groups, and to delete affiliates.
+	 *
+	 * @since 3.41.29
+	 * @since 3.41.32 Added link tags for affiliate deleting and creating.
+	 *
+	 * @param int   $user_id The user ID.
+	 * @param array $user_tags The user's tags.
+	 */
+	public function tags_modified( $user_id, $user_tags ) {
+
+		// Group Tag Linking.
+
+		$sld       = new \SolidAffiliate\Models\AffiliateGroup();
+		$aff       = new SolidAffiliate\Models\Affiliate();
+		$affiliate = $aff->for_user_id( $user_id );
+		$groups    = $sld->all();
+
+		foreach ( $groups as $key => $group ) {
+
+			$settings = wpf_get_option( 'saff_tag_group_link_' . $group->attributes['id'], array() );
+
+			if ( empty( $settings ) ) {
+				continue;
+			}
+
+			// If the affiliate has the linked tag, add them to the group.
+			if ( array_intersect( $settings, $user_tags ) ) {
+
+				// Checking if the affiliate is already in the group.
+				if ( ! empty( $affiliate ) && $affiliate->affiliate_group_id !== $group->attributes['id'] ) {
+
+					wpf_log( 'info', $user_id, 'Adding affiliate <strong>' . get_user_meta( $user_id )['first_name'][0] . ' ' . get_user_meta( $user_id )['last_name'][0] . '</strong> to group <strong>' . $group->attributes['name'] . '</strong> via linked tag ' . wpf_get_tag_label( $settings[0] ) . '.' );
+
+					$sld->add_affiliate_to_group( $affiliate->attributes['id'], $group->attributes['id'] );
+				}
+			}
+
+			// If the affiliate doesn't have the linked tag, remove them from the group.
+			if ( ! array_intersect( $settings, $user_tags ) ) {
+
+				if ( ! empty( $affiliate ) && $affiliate->affiliate_group_id === $group->attributes['id'] ) {
+
+					wpf_log( 'info', $user_id, 'Removing affiliate <strong>' . get_user_meta( $user_id )['first_name'][0] . ' ' . get_user_meta( $user_id )['last_name'][0] . '</strong> from group <strong>' . $group->attributes['name'] . '</strong> since they no longer have the linked tag ' . wpf_get_tag_label( $settings[0] ) . '.' );
+
+					// We'll add them to the default group if it exists, as recommended by Solid Affiliate.
+					$default = $sld->get_default_group_id();
+					if ( ! empty( $default ) ) {
+						$sld->add_affiliate_to_group( $affiliate->attributes['id'], $default );
+					} else {
+						$sld->add_affiliate_to_group( $affiliate->attributes['id'], 0 );
+					}
+				}
+			}
+		}
+
+		// Link Tags.
+
+		remove_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
+
+		$link_tag = wpf_get_option( 'saff_tag_created', array() );
+
+		if ( ! empty( $link_tag ) ) {
+
+			$link_tag = $link_tag[0];
+
+			if ( in_array( $link_tag, $user_tags, true ) && false === $affiliate ) {
+
+				// If the user has the link tag and is not an affiliate, create an affiliate.
+
+				wpf_log(
+					'info',
+					$user_id,
+					'User granted affiliate account by linked tag <strong>' . wpf_get_tag_label( $link_tag ) . '</strong>.'
+				);
+
+				$user = get_user_by( 'id', $user_id );
+				if ( $user instanceof WP_User ) {
+					$fields = array(
+						'payment_email'      => '',
+						'status'             => 'approved',
+						'registration_notes' => 'This affiliate was auto-created for a user by WP Fusion\'s Link Tag setting.',
+						'first_name'         => $user->first_name,
+						'last_name'          => $user->last_name,
+					);
+
+					SolidAffiliate\Models\AffiliatePortal::create_affiliate_for_existing_user( $user->ID, $fields, false );
+				}
+			} elseif ( in_array( $link_tag, $user_tags, true ) && 'approved' !== $affiliate->status ) {
+
+				// If the user has a link tag and is not an approved affiliate, approve them.
+
+				wpf_log(
+					'info',
+					$user_id,
+					'Affiliate activated by linked tag <strong>' . wpf_get_tag_label( $link_tag ) . '</strong>.'
+				);
+
+				$affiliate->status = 'approved';
+				$affiliate->save();
+			} elseif ( ! in_array( $link_tag, $user_tags, true ) && $affiliate ) {
+
+				// If the user does not have the link tag and is an affiliate, delete them.
+
+				wpf_log(
+					'info',
+					$user_id,
+					'Affiliate deleted by linked tag <strong>' . wpf_get_tag_label( $link_tag ) . '</strong>.'
+				);
+
+				SolidAffiliate\Lib\Misc::handle_deleted_user( $user_id );
+			}
+		}
+
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
+	}
+
+	/**
+	 * Affiliate Status Change
 	 * Triggered when an affiliate instance has been updated.
 	 *
 	 * @since 3.38.40
+	 * @since 3.41.29 Added support for affiliate groups.
 	 *
 	 * @param int    $affiliate_id Affiliate ID.
-	 * @param object $affiliate    SolidAffiliate\Models\Affiliate.
+	 * @param object $affiliate    SolidAffiliate\Models\Affiliate the old affiliate model.
 	 */
 	public function affiliate_status_change( $affiliate_id, $affiliate ) {
 		// We did that here because the action only returns the old affilaite instance not the updated one.
@@ -87,9 +211,36 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 		$updated_affiliate  = \SolidAffiliate\Models\Affiliate::find( $affiliate_id );
 		$updated_attributes = $updated_affiliate->__get( 'attributes' );
 
-		// Same status nothing changed.
-		if ( strtolower( $old_attributes['status'] ) === strtolower( $updated_attributes['status'] ) ) {
+		// Same status & group, nothing changed.
+		if ( strtolower( $old_attributes['status'] ) === strtolower( $updated_attributes['status'] ) && $old_attributes['affiliate_group_id'] === $updated_attributes['affiliate_group_id'] ) {
 			return;
+		}
+
+		// Since we're switching groups, we need to remove any old link tags if they exist.
+		if ( ! empty( $old_attributes['affiliate_group_id'] ) ) {
+			$settings  = wpf_get_option( 'saff_tag_group_link_' . $old_attributes['affiliate_group_id'], array() );
+			$user_tags = wpf_get_tags( $updated_attributes['user_id'] );
+
+			if ( ! empty( $settings ) && array_intersect( $settings, $user_tags ) ) {
+
+				wpf_log( 'info', $updated_attributes['user_id'], 'Removing tag from affiliate <strong>' . get_user_meta( $updated_attributes['user_id'] )['first_name'][0] . ' ' . get_user_meta( $updated_attributes['user_id'] )['last_name'][0] . '</strong> since they are no longer in the linked group.' );
+
+				wp_fusion()->user->remove_tags( $settings, $updated_attributes['user_id'] );
+			}
+		}
+
+		// Add the new link tag if it exists.
+		// 0 being no group.
+		if ( 0 !== $updated_attributes['affiliate_group_id'] ) {
+			$settings  = wpf_get_option( 'saff_tag_group_link_' . $updated_attributes['affiliate_group_id'], array() );
+			$user_tags = wpf_get_tags( $updated_attributes['user_id'] );
+
+			if ( ! empty( $settings ) && ! array_intersect( $settings, $user_tags ) ) {
+
+				wpf_log( 'info', $updated_attributes['user_id'], 'Applying tag to affiliate <strong>' . get_user_meta( $updated_attributes['user_id'] )['first_name'][0] . ' ' . get_user_meta( $updated_attributes['user_id'] )['last_name'][0] . '</strong> since they were added to the linked group.' );
+
+				wp_fusion()->user->apply_tags( $settings, $updated_attributes['user_id'] );
+			}
 		}
 
 		if ( strtolower( $updated_attributes['status'] ) === 'approved' ) {
@@ -99,7 +250,6 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 		if ( strtolower( $updated_attributes['status'] ) === 'rejected' ) {
 			$this->affiliate_rejected( $updated_attributes['user_id'] );
 		}
-
 	}
 
 
@@ -109,8 +259,6 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 	 * @since  3.38.40
 	 */
 	public function admin_affiliate_registration() {
-
-		$nonce = \SolidAffiliate\Controllers\AffiliatesController::NONCE_SUBMIT_AFFILIATE;
 
 		if ( ! isset( $_GET['page'] ) || $_GET['page'] !== 'solid-affiliate-affiliates' || ! isset( $_GET['action'] ) ) {
 			return;
@@ -145,9 +293,12 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 
 
 	/**
-	 * Add an affiliate to crm.
+	 * Add Affiliate
+	 * Adds an affiliate to crm.
 	 *
-	 * @since  3.38.40
+	 * @since 3.38.40
+	 * @since 3.41.32 Added support for link tag.
+	 *
 	 * @param int $affiliate_id affiliate id.
 	 */
 	public function add_affiliate( $affiliate_id ) {
@@ -155,6 +306,7 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 
 		wp_fusion()->user->push_user_meta( $affiliate_data['user_id'], $affiliate_data );
 
+		$user_tags  = wpf_get_tags( $affiliate_data['user_id'] );
 		$apply_tags = wpf_get_option( 'saff_apply_tags', array() );
 
 		// If the affiliates are approved, make sure they have these tags as well.
@@ -163,16 +315,33 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 			$apply_tags    = array_merge( $apply_tags, $approved_tags );
 		}
 
+		$apply_tags = array_diff( $apply_tags, $user_tags );
+
 		if ( ! empty( $apply_tags ) ) {
 			wp_fusion()->user->apply_tags( $apply_tags, $affiliate_data['user_id'] );
 		}
 
+		remove_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
+
+		// Link Tags.
+
+		$link_tag  = wpf_get_option( 'saff_tag_created', array() );
+
+		if ( ! empty( $link_tag ) ) {
+			wp_fusion()->user->apply_tags( $link_tag, $affiliate_data['user_id'] );
+		}
+
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
 	}
 
 	/**
+	 * Register Settings
 	 * Registers additional Solid Affiliate settings.
 	 *
-	 * @since  3.38.40
+	 * @since 3.38.40
+	 * @since 3.41.29 Added support for affiliate groups.
+	 * @since 3.41.31 Added create affiliate and delete affiliate link tags & apply tags.
+	 *
 	 * @param array $settings wpf settings.
 	 * @param array $options wpf options.
 	 * @return  array Settings
@@ -209,6 +378,14 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 			'section' => 'integrations',
 		);
 
+		$settings['saff_apply_tags_deleted'] = array(
+			'title'   => __( 'Apply Tags - Affiliate Deleted', 'wp-fusion' ),
+			'desc'    => __( 'Apply these tags when affiliates are deleted.', 'wp-fusion' ),
+			'std'     => array(),
+			'type'    => 'assign_tags',
+			'section' => 'integrations',
+		);
+
 		$settings['saff_apply_tags_first_referral'] = array(
 			'title'   => __( 'Apply Tags - First Referral', 'wp-fusion' ),
 			'desc'    => __( 'Apply these tags when affiliates get their first referral.', 'wp-fusion' ),
@@ -229,8 +406,29 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 
 		}
 
-		return $settings;
+		$settings['saff_tag_created'] = array(
+			'title'   => __( 'Link with Tag - Affiliate Activation', 'wp-fusion' ),
+			'desc'    => __( 'When this tag is applied, an affiliate account will be created for the user and approved. If the tag is removed, the affiliate account will be removed.', 'wp-fusion' ),
+			'type'    => 'assign_tags',
+			'section' => 'integrations',
+			'limit'   => 1,
+		);
 
+		// Group tag linking.
+
+		$affiliate_groups = \SolidAffiliate\Models\AffiliateGroup::all();
+
+		foreach ( $affiliate_groups as $key => $group ) {
+			$settings[ 'saff_tag_group_link_' . $group->attributes['id'] ] = array(
+				'title'   => sprintf( __( 'Link with Tag - %s', 'wp-fusion' ), $group->attributes['name'] ),
+				'desc'    => sprintf( __( 'Add affiliates with this tag to the <strong>%s</strong> group. Also adds the tag to affiliates who join the group.', 'wp-fusion' ), $group->attributes['name'] ),
+				'type'    => 'assign_tags',
+				'section' => 'integrations',
+				'limit'   => 1,
+			);
+		}
+
+		return $settings;
 	}
 
 
@@ -287,25 +485,6 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 			'group'  => 'solid_aff',
 			'pseudo' => true,
 		);
-
-		/**
-		 * Not currently in use.
-
-		$meta_fields['saff_affiliate_group_id'] = array(
-			'label'  => 'Affiliate Group ID',
-			'type'   => 'integer',
-			'group'  => 'solid_aff',
-			'pseudo' => true,
-		);
-
-		$meta_fields['saff_affiliate_mailchimp_user_id'] = array(
-			'label'  => 'Affiliate Mailchimp User ID',
-			'type'   => 'integer',
-			'group'  => 'solid_aff',
-			'pseudo' => true,
-		);
-
-		*/
 
 		$meta_fields['saff_affiliate_payment_email'] = array(
 			'label'  => 'Affiliate Payment Email',
@@ -597,7 +776,87 @@ class WPF_Solid_Affiliate extends WPF_Integrations_Base {
 
 	}
 
+	/**
+	 * Affiliate Deleted
+	 * Applies tags when an affiliate is deleted.
+	 *
+	 * @since 3.41.32
+	 *
+	 * @param int $affiliate_id The affiliate ID.
+	 */
+	public function affiliate_deleted( $affiliate_id ) {
 
+		$meta = SolidAffiliate\Models\AffiliateMeta::get_meta_for( $affiliate_id, 'sld_custom_affiliate_slug' );
+
+		if ( empty( $meta ) ) {
+			return;
+		}
+
+		/**
+		 * Start the Query.
+		 *
+		 * We need to use the Query Builder because by the time this action is triggered, the affiliate has already been deleted.
+		 * Affiliate meta data is stored even after the affiliate is deleted in descending order.
+		 */
+		$builder = new TenQuality\WP\Database\QueryBuilder();
+
+		// Newly added affiliates who used to be affiliates, are given a random number at the end of their login name. We need to remove that.
+		$login = trim( $meta->meta_value, '0..9' );
+
+		$builder->select( 'meta_value' )
+			->from( 'solid_affiliate_affiliate_meta' ) // Adds wp_ prefix automatically.
+			->where( array( 'meta_value' ) )
+			->keywords( $login, array( 'meta_value', 'affiliate_id' ) ) // keywords requires two columns to check so we arbitrarily check affiliate_id too.
+			->get();
+		$results = $builder->col();
+
+		// The original login for the affiliate will be first in the array.
+		$user_id   = get_user_by( 'login', $results[0] )->ID;
+		$user_tags = wpf_get_tags( $user_id );
+
+		$apply_tags  = array();
+		$remove_tags = array();
+
+		// Apply tags.
+
+		$settings = wpf_get_option( 'saff_apply_tags_deleted' );
+
+		if ( ! empty( $settings ) ) {
+			$apply_tags = array_merge( $apply_tags, $settings );
+		}
+
+		// Link Tags.
+
+		// If the user has the creation link tag, remove it.
+		$settings = wpf_get_option( 'saff_tag_created' );
+
+		if ( ! empty( $settings ) ) {
+			$remove_tags = array_merge( $remove_tags, $settings );
+		}
+
+		remove_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
+
+		// Only apply tags that the user does not already have. This prevents unnecessarily trying to apply tags.
+		// A clean WPF log is happy WPF log!
+		$apply_tags  = array_diff( $apply_tags, $user_tags );
+		$remove_tags = array_intersect( $remove_tags, $user_tags );
+
+		if ( ! empty( $apply_tags ) ) {
+
+			wpf_log( 'info', $user_id, 'Affiliate deleted. Applying tags.' );
+
+			wp_fusion()->user->apply_tags( $apply_tags, $user_id );
+
+			update_user_meta( $user_id, 'solid_affiliate_deleted_affiliate', true );
+			delete_user_meta( $user_id, 'solid_affiliate_created_affiliate' );
+		}
+		if ( ! empty( $remove_tags ) ) {
+
+			wp_fusion()->user->remove_tags( $remove_tags, $user_id );
+		}
+
+		add_action( 'wpf_tags_modified', array( $this, 'tags_modified' ), 10, 2 );
+	}
 
 	/**
 	 * //

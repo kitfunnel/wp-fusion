@@ -45,18 +45,14 @@ class WPF_EDD extends WPF_Integrations_Base {
 		add_filter( 'wpf_meta_fields', array( $this, 'prepare_meta_fields' ), 20 );
 		add_action( 'save_post', array( $this, 'save_meta_box_data' ) );
 
-		// Payment status.
-		add_action( 'edd_view_order_details_sidebar_after', array( $this, 'order_details_sidebar' ) );
-		add_action( 'edd_wpf_process', array( $this, 'process_order_again' ) );
-
-		// Customer record.
-		add_action( 'edd_after_customer_edit_link', array( $this, 'customer_edit_link' ) );
-
 		// Payment stuff.
 		add_action( 'edd_complete_purchase', array( $this, 'complete_purchase' ) );
 		add_action( 'edd_free_downloads_post_complete_payment', array( $this, 'complete_purchase' ) );
 		add_action( 'wpf_edd_async_checkout', array( $this, 'complete_purchase' ), 10, 2 );
 		add_action( 'edd_post_refund_payment', array( $this, 'refund_complete' ), 10 );
+
+		// Order Statuses.
+		add_action( 'edd_transition_order_status', array( $this, 'transition_order_status' ), 10, 3 );
 
 		// Discounts.
 		add_action( 'edd_add_discount_form_bottom', array( $this, 'discount_fields' ), 10 );
@@ -81,6 +77,17 @@ class WPF_EDD extends WPF_Integrations_Base {
 		add_filter( 'wpf_user_register', array( $this, 'user_register' ) );
 		add_filter( 'wpf_user_update', array( $this, 'user_update' ), 10, 2 );
 
+		// Payment status.
+		add_action( 'edd_view_order_details_sidebar_after', array( $this, 'order_details_sidebar' ) );
+		add_action( 'edd_wpf_process', array( $this, 'process_order_again' ) );
+
+		// Customer record.
+		add_action( 'edd_after_customer_edit_link', array( $this, 'customer_edit_link' ) );
+
+		// Orders table columns.
+		add_filter( 'edd_payments_table_columns', array( $this, 'add_wp_fusion_column' ) );
+		add_filter( 'edd_payments_table_column', array( $this, 'wp_fusion_column_content' ), 10, 3 );
+
 		// Export functions.
 		add_filter( 'wpf_export_options', array( $this, 'export_options' ) );
 		add_filter( 'wpf_batch_edd_init', array( $this, 'batch_init' ) );
@@ -91,27 +98,33 @@ class WPF_EDD extends WPF_Integrations_Base {
 		add_filter( 'edd_purchase_variable_prices', array( $this, 'purchase_variable_prices' ), 10, 2 );
 
 		// Email optin.
-		add_action( 'edd_purchase_form_user_info_fields', array( $this, 'add_optin_field' ) );
-		add_filter( 'edd_payment_meta', array( $this, 'save_optin_field' ) );
+		add_action( 'edd_purchase_form_before_submit', array( $this, 'add_optin_field' ) );
+		add_action( 'edd_complete_purchase', array( $this, 'save_optin_field' ), 5, 2 );
 
 	}
 
 	/**
 	 * Save optin field.
 	 *
-	 * @since  3.37.30
+	 * @since 3.37.30
+	 * @since 3.41.16 Moved from edd_payment_meta to edd_complete_purchase.
 	 *
-	 * @return array The payment meta.
+	 * @param int         $order_id Order ID.
+	 * @param EDD_Payment $payment  Payment object.
 	 */
-	public function save_optin_field( $payment_meta ) {
+	public function save_optin_field( $order_id, $payment ) {
 
-		if ( isset( $_POST['edd_email_optin'] ) ) {
-			$payment_meta['edd_email_optin'] = isset( $_POST['edd_email_optin'] ) ? filter_var( $_POST['edd_email_optin'], FILTER_VALIDATE_BOOLEAN ) : '';
-		} else {
-			$payment_meta['edd_email_optin'] = false;
+		if ( '' !== $payment->get_meta( 'edd_email_optin' ) ) {
+			// Don't modify the value if it's already saved.
+			return;
 		}
 
-		return $payment_meta;
+		if ( ! empty( $_POST['edd_email_optin'] ) ) {
+			$payment->add_meta( 'edd_email_optin', date( 'Y-m-d h:i:s' ) );
+		} else {
+			$payment->add_meta( 'edd_email_optin', false );
+		}
+
 	}
 
 	/**
@@ -127,7 +140,23 @@ class WPF_EDD extends WPF_Integrations_Base {
 			return;
 		}
 
-		if ( 'unchecked' == wpf_get_option( 'edd_email_optin_default' ) ) {
+		if ( wpf_get_option( 'edd_hide_email_optin' ) && is_user_logged_in() ) {
+
+			$payments = edd_get_payments(
+				array(
+					'number'   => 999,
+					'status'   => array( 'publish', 'edd_subscription' ),
+					'user'     => get_current_user_id(),
+					'meta_key' => 'edd_email_optin',
+				)
+			);
+
+			if ( ! empty( $payments ) ) {
+				return;
+			}
+		}
+
+		if ( 'unchecked' === wpf_get_option( 'edd_email_optin_default' ) ) {
 			$default = false;
 		} else {
 			$default = true;
@@ -136,22 +165,27 @@ class WPF_EDD extends WPF_Integrations_Base {
 		$message = wpf_get_option( 'edd_email_optin_message', __( 'I consent to receive marketing emails', 'wp-fusion' ) );
 
 		echo '
+		<fieldset id="edd-wpf-email-optin">
 			<div class="edd-email-optin">
 				<input name="edd_email_optin" type="checkbox" id="edd_email_optin" ' . checked( 1, $default, false ) . '>
 				<label for="edd_email_optin">' . esc_html( $message ) . '</label>
 			</div>
-		';
+		</fieldset>';
 
 	}
 
 
 	/**
-	 * Registers additional EDD settings
+	 * Register Settings
+	 * Registers additional EDD settings.
 	 *
-	 * @access  public
-	 * @return  array Settings
+	 * @since 1.0.0
+	 *
+	 * @param array $settings Settings.
+	 * @param array $options Options.
+	 *
+	 * @return array Settings
 	 */
-
 	public function register_settings( $settings, $options ) {
 
 		$settings['edd_header'] = array(
@@ -180,7 +214,14 @@ class WPF_EDD extends WPF_Integrations_Base {
 			'desc'    => __( 'Display a checkbox on the checkout page where customers can opt-in to receive email marketing.', 'wp-fusion' ),
 			'type'    => 'checkbox',
 			'section' => 'integrations',
-			'unlock'  => array( 'edd_email_optin_message', 'edd_email_optin_default', 'edd_email_optin_tags' ),
+			'unlock'  => array( 'edd_email_optin_message', 'edd_email_optin_default', 'edd_email_optin_tags', 'edd_hide_email_optin' ),
+		);
+
+		$settings['edd_hide_email_optin'] = array(
+			'title'   => __( 'Hide If Consented', 'wp-fusion' ),
+			'desc'    => __( 'Hide the email optin checkbox if the customer has previously opted in.', 'wp-fusion' ),
+			'type'    => 'checkbox',
+			'section' => 'integrations',
 		);
 
 		$settings['edd_email_optin_message'] = array(
@@ -210,8 +251,36 @@ class WPF_EDD extends WPF_Integrations_Base {
 			'section' => 'integrations',
 		);
 
-		return $settings;
+		// EDD Order Statuses.
+		$settings['edd_header_orders'] = array(
+			'title'   => __( 'Easy Digital Downloads Order Statuses', 'wp-fusion' ),
+			'type'    => 'heading',
+			'desc'    => __( '<p>The settings here let you apply tags to a contact when an order status is changed in Easy Digital Downloads.</p><p>This is useful for tracking changes in status, for example when orders are marked failed or refunded.</p>', 'wp-fusion' ),
+			'section' => 'integrations',
+		);
 
+		foreach ( edd_get_payment_statuses() as $status => $label ) {
+
+			if ( 'processing' === $status || 'pending' === $status || 'failed' === $status ) {
+
+				$settings[ 'edd_tags_' . $status ] = array(
+					'title'   => sprintf( __( 'Payment %s', 'wp-fusion' ), $label ),
+					'std'     => array(),
+					'type'    => 'assign_tags',
+					'section' => 'integrations',
+				);
+				continue;
+			}
+
+			$settings[ 'edd_tags_' . $status ] = array(
+				'title'   => sprintf( __( 'Order %s', 'wp-fusion' ), $label ),
+				'std'     => array(),
+				'type'    => 'assign_tags',
+				'section' => 'integrations',
+			);
+		}
+
+		return $settings;
 	}
 
 
@@ -357,7 +426,6 @@ class WPF_EDD extends WPF_Integrations_Base {
 			if ( isset( $post_data['email_optin'] ) && 'on' === $post_data['email_optin'] ) {
 				$post_data['edd_email_optin'] = true;
 			}
-
 		}
 
 		return $post_data;
@@ -426,6 +494,34 @@ class WPF_EDD extends WPF_Integrations_Base {
 	}
 
 	/**
+	 * Upate Customer
+	 *
+	 * Triggered when an order status is updated. Updates the customers tags based on the tags
+	 * specified in the EDD Order Statuses settings.
+	 * Also triggers when a new order is created and an order status is assigned.
+	 *
+	 * @since 3.41.29
+	 *
+	 * @param string $old_status The old order status.
+	 * @param string $new_status The new order status.
+	 * @param int    $order_id   The order ID.
+	 */
+	public function transition_order_status( $old_status, $new_status, $order_id ) {
+
+		// We don't need to check apply or remove tags if the status hasn't changed.
+		if ( $new_status === $old_status || empty( $new_status ) || empty( $old_status ) || 'publish' === $old_status || 'new' === $old_status ) {
+			return;
+		}
+
+		$order      = edd_get_order( $order_id );
+		$apply_tags = wpf_get_option( 'edd_tags_' . $new_status );
+
+		// Apply tags.
+		wp_fusion()->user->apply_tags( $apply_tags, $order->user_id );
+
+	}
+
+	/**
 	 * Triggered when an order is completed. Updates contact record (or creates
 	 * it) and applies tags. Note that this only runs when an order status is
 	 * Completed, not Renewal.
@@ -439,7 +535,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 	public function complete_purchase( $payment_id, $doing_async = false, $force = false ) {
 
 		// Defer until next page if async checkout is enabled
-		if ( ! is_admin() && wpf_get_option( 'edd_async' ) == true && $doing_async == false ) {
+		if ( ! is_admin() && wpf_get_option( 'edd_async' ) && ! $doing_async ) {
 
 			wp_fusion()->batch->quick_add( 'wpf_edd_async_checkout', array( $payment_id, true ) );
 			return;
@@ -470,7 +566,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 			'order_date'  => $payment->get_meta( '_edd_completed_date' ),
 		);
 
-		if ( ! empty( $payment_meta['edd_email_optin'] ) ) {
+		if ( $payment->get_meta( 'edd_email_optin' ) ) {
 			$user_meta['email_optin']     = true;
 			$user_meta['edd_email_optin'] = true;
 		}
@@ -623,7 +719,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 			}
 
 			// Variable pricing tags
-			if ( isset( $wpf_settings['apply_tags_price'] ) && ! empty( $item['item_number']['options']['price_id'] ) ) {
+			if ( isset( $wpf_settings['apply_tags_price'] ) && isset( $item['item_number']['options']['price_id'] ) ) {
 
 				$price_id = $item['item_number']['options']['price_id'];
 
@@ -663,7 +759,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 		}
 
 		// Email optin.
-		if ( wpf_get_option( 'edd_email_optin' ) && ! empty( $payment_meta['edd_email_optin'] ) ) {
+		if ( wpf_get_option( 'edd_email_optin' ) && $payment->get_meta( 'edd_email_optin' ) ) {
 			$apply_tags = array_merge( $apply_tags, wpf_get_option( 'edd_email_optin_tags', array() ) );
 		}
 
@@ -715,27 +811,16 @@ class WPF_EDD extends WPF_Integrations_Base {
 
 	public function discount_fields( $discount_id = false ) {
 
-		$defaults = array(
+		$settings = array(
 			'allow_tags'      => array(),
 			'auto_apply_tags' => array(),
 			'discount_label'  => false,
 			'apply_tags'      => array(),
 		);
 
-		if ( false != $discount_id ) {
-
-			// Compatible with pre and > 3.0
-
-			$discount = edd_get_discount( $discount_id );
-			$settings = $discount->get_meta( 'wpf_settings', true );
-
+		if ( $discount_id ) {
+			$settings = wp_parse_args( edd_get_adjustment_meta( $discount_id, 'wpf_settings', true ), $settings );
 		}
-
-		if ( empty( $settings ) ) {
-			$settings = array();
-		}
-
-		$settings = array_merge( $defaults, $settings );
 
 		?>
 
@@ -846,12 +931,11 @@ class WPF_EDD extends WPF_Integrations_Base {
 
 			// Compatible with pre and > 3.0
 
-			$discount = edd_get_discount( $discount_id );
-			$discount->update_meta( 'wpf_settings', $_POST['wpf_settings'] );
+			edd_update_adjustment_meta( $discount_id, 'wpf_settings', wpf_clean( $_POST['wpf_settings'] ) );
 
 		} else {
 
-			// There isn't yet a $discount->delete_meta() so we'll wait for 3.0
+			edd_delete_adjustment_meta( $discount_id, 'wpf_settings' );
 
 			delete_post_meta( $discount_id, '_edd_discount_wpf_settings' );
 
@@ -878,8 +962,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 			return $is_valid;
 		}
 
-		$discount = edd_get_discount( $discount_id );
-		$settings = $discount->get_meta( 'wpf_settings', true );
+		$settings = edd_get_adjustment_meta( $discount_id, 'wpf_settings', true );
 
 		if ( empty( $settings ) || empty( $settings['allow_tags'] ) ) {
 			return $is_valid;
@@ -943,10 +1026,9 @@ class WPF_EDD extends WPF_Integrations_Base {
 
 		$args = array(
 			'post_status' => 'active',
-			'fields'      => 'ids',
 			'meta_query'  => array(
 				array(
-					'key'     => '_edd_discount_wpf_settings',
+					'key'     => 'wpf_settings',
 					'compare' => 'EXISTS',
 				),
 			),
@@ -958,10 +1040,9 @@ class WPF_EDD extends WPF_Integrations_Base {
 			return;
 		}
 
-		foreach ( $discounts as $discount_id ) {
+		foreach ( $discounts as $discount ) {
 
-			$discount = edd_get_discount( $discount_id );
-			$settings = $discount->get_meta( 'wpf_settings', true );
+			$settings = (array) edd_get_adjustment_meta( $discount->id, 'wpf_settings', true );
 
 			if ( empty( $settings['auto_apply_tags'] ) ) {
 				continue;
@@ -971,7 +1052,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 
 				// The user has the tag
 
-				$should_apply = apply_filters( 'wpf_auto_apply_coupon_for_user', true, $discount_id, wpf_get_current_user_id() );
+				$should_apply = apply_filters( 'wpf_auto_apply_coupon_for_user', true, $discount->id, wpf_get_current_user_id() );
 
 				if ( $should_apply && edd_is_discount_valid( $discount->get_code(), wpf_get_current_user_id() ) ) {
 
@@ -1033,7 +1114,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 			}
 
 			// Variable pricing tags
-			if ( isset( $wpf_settings['apply_tags_price'] ) && ! empty( $item['item_number']['options']['price_id'] ) ) {
+			if ( isset( $wpf_settings['apply_tags_price'] ) && isset( $item['item_number']['options']['price_id'] ) ) {
 
 				$price_id = $item['item_number']['options']['price_id'];
 
@@ -1045,7 +1126,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 			}
 
 			// Variable pricing tags: refund tag
-			if ( isset( $wpf_settings['apply_tags_refund_price'] ) && ! empty( $item['item_number']['options']['price_id'] ) ) {
+			if ( isset( $wpf_settings['apply_tags_refund_price'] ) && isset( $item['item_number']['options']['price_id'] ) ) {
 
 				$price_id = $item['item_number']['options']['price_id'];
 
@@ -1421,7 +1502,8 @@ class WPF_EDD extends WPF_Integrations_Base {
 						<span class="label"><?php _e( 'Opted In:', 'wp-fusion' ); ?></span>&nbsp;
 
 						<span class="value">
-							<?php if ( ! empty( $meta ) && ! empty( $meta['edd_email_optin'] ) ) : ?>
+							<?php // prior to 3.41.16 the optin status was stored inside the payment_meta array, but this wasn't compatible with free downloads. ?>
+							<?php if ( ( ! empty( $meta ) && ! empty( $meta['edd_email_optin'] ) ) || $payment->get_meta( 'edd_email_optin' ) ) : ?>
 								<span><?php _e( 'Yes', 'wp-fusion' ); ?></span>
 								<span class="dashicons dashicons-yes-alt"></span>
 							<?php else : ?>
@@ -1553,6 +1635,104 @@ class WPF_EDD extends WPF_Integrations_Base {
 
 			echo '</span>';
 		}
+
+	}
+
+	/**
+	 * Add a column to the Downloads -> Orders admin screen to indicate
+	 * whether an order has been successfully processed by WP Fusion.
+	 *
+	 * @since  3.42.6
+	 *
+	 * @param  array $columns The current list of columns.
+	 * @return array The modified list of columns.
+	 */
+	public static function add_wp_fusion_column( $columns ) {
+
+		$new_column = '<span class="wpf-tip wpf-tip-bottom wpf-woo-column-title" data-tip="' . esc_attr__( 'WP Fusion Status', 'wp-fusion' ) . '"><span>' . __( 'WP Fusion Status', 'wp-fusion' ) . '</span>' . wpf_logo_svg( 14 ) . '</span>';
+
+		return wp_fusion()->settings->insert_setting_after( 'status', $columns, array( 'wp_fusion' => $new_column ) );
+
+	}
+
+
+	/**
+	 * WP Fusion orders table column content.
+	 *
+	 * @since 3.42.6
+	 *
+	 * @param string $value      The current value.
+	 * @param int    $payment_id The payment ID.
+	 * @param string $column     The column name.
+	 * @return string The modified value.
+	 */
+	public function wp_fusion_column_content( $value, $payment_id, $column ) {
+
+		if ( 'wp_fusion' === $column ) {
+
+			$payment = new EDD_Payment( $payment_id );
+
+			$complete = $payment->get_meta( 'wpf_complete' );
+
+			if ( $complete ) {
+
+				$class = 'success';
+
+				// Get the contact edit URL.
+
+				$contact_id = $payment->get_meta( WPF_CONTACT_ID_META_KEY );
+
+				if ( $contact_id ) {
+
+					$url = wp_fusion()->crm->get_contact_edit_url( $contact_id );
+
+					if ( $url ) {
+						$id_text = '<a href="' . esc_url_raw( $url ) . '" target="_blank">#' . esc_html( $contact_id ) . '</a>';
+					} else {
+						$id_text = '#' . esc_html( $contact_id );
+					}
+				} else {
+					$class   = 'partial-success';
+					$id_text = '<em>' . __( 'unknown', 'wp-fusion' ) . '</em>';
+				}
+
+				$show_date = date_i18n( get_option( 'date_format' ) . ' \a\t ' . get_option( 'time_format' ), strtotime( $complete ) );
+				$tooltip   = sprintf(
+					__( 'This order was synced to %1$s contact ID %2$s on %3$s.', 'wp-fusion' ),
+					esc_html( wp_fusion()->crm->name ),
+					$id_text,
+					esc_html( $show_date )
+				);
+
+				if ( function_exists( 'wp_fusion_ecommerce' ) ) {
+
+					// Enhanced ecommerce.
+
+					if ( $payment->get_meta( 'wpf_ec_complete' ) ) {
+
+						$invoice_id = $payment->get_meta( 'wpf_ec_' . wp_fusion()->crm->slug . '_invoice_id' );
+
+						if ( $invoice_id ) {
+							$tooltip .= '<br /><br />' . sprintf( __( 'It was processed by Enhanced Ecommerce with invoice ID #%s.', 'wp-fusion' ), $invoice_id );
+						} else {
+							$tooltip .= '<br /><br />' . __( 'It was processed by Enhanced Ecommerce.', 'wp-fusion' );
+						}
+					} else {
+
+						$class    = 'partial-success';
+						$tooltip .= '<br /><br />' . __( 'It was not processed by Enhanced Ecommerce.', 'wp-fusion' );
+
+					}
+				}
+			} else {
+				$class   = 'fail';
+				$tooltip = sprintf( __( 'This order was not synced to %s.' ), wp_fusion()->crm->name );
+			}
+
+			return '<i class="icon-wp-fusion wpf-tip wpf-tip-bottom ' . esc_attr( $class ) . '" data-tip="' . esc_attr( $tooltip ) . '"></i>';
+		}
+
+		return $value;
 
 	}
 
