@@ -468,8 +468,19 @@ class WPF_Shortcodes {
 			$meta_value = '';
 		}
 
-		$meta_value = $atts['field_format'] ? call_user_func( $atts['field_format'], $meta_value ) : $meta_value;
-		$value      = $atts['value_format'] ? call_user_func( $atts['value_format'], $atts['value'] ) : $atts['value'];
+		$allowed_functions = array(
+			'strtolower',
+			'strotoupper',
+			'strval',
+			'abs',
+			'ceil',
+			'floor',
+			'round',
+			'strtotime',
+		);
+
+		$meta_value = $atts['field_format'] && in_array( $atts['field_format'], $allowed_functions, true ) ? call_user_func( $atts['field_format'], $meta_value ) : $meta_value;
+		$value      = $atts['value_format'] && in_array( $atts['value_format'], $allowed_functions, true ) ? call_user_func( $atts['value_format'], $atts['value'] ) : $atts['value'];
 
 		if ( 'strtotime' === $atts['field_format'] && false === $meta_value ) {
 			return sprintf( wp_kses_post( 'Oops! Your input string to the <code>%s</code> attribute was not successfully <a href="https://www.php.net/manual/en/function.strtotime.php" target="_blank">parsed by <code>strtotime()</code></a>.', 'wp-fusion' ), 'userfield' );

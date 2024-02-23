@@ -45,9 +45,8 @@ class WPF_SendinBlue {
 	/**
 	 * Allows text to be overridden for CRMs that use different segmentation labels (groups, lists, etc)
 	 *
-	 * @var tag_type
+	 * @var string
 	 */
-
 	public $tag_type = 'List';
 
 	/**

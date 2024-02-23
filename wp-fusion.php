@@ -4,7 +4,7 @@
  * Plugin Name: WP Fusion
  * Description: WP Fusion connects your website to your CRM or marketing automation tool, with support for dozens of CRMs and 100+ WordPress plugins.
  * Plugin URI: https://wpfusion.com/
- * Version: 3.42.8.1
+ * Version: 3.42.11
  * Author: Very Good Plugins
  * Author URI: https://verygoodplugins.com/
  * Text Domain: wp-fusion
@@ -33,7 +33,7 @@
  * **********************************************************************
  */
 
-define( 'WP_FUSION_VERSION', '3.42.8.1' );
+define( 'WP_FUSION_VERSION', '3.42.11' );
 
 // deny direct access.
 if ( ! function_exists( 'add_action' ) ) {
@@ -298,7 +298,7 @@ final class WP_Fusion {
 		}
 
 		if ( ! defined( 'WPF_EDD_ITEM_ID' ) ) {
-			define( 'WPF_EDD_ITEM_ID', '3678' );
+			define( 'WPF_EDD_ITEM_ID', '4358' );
 		}
 
 	}
@@ -522,6 +522,7 @@ final class WP_Fusion {
 				'wp-user-manager'               => 'WPUM',
 				'forminator'                    => 'Forminator',
 				'suremembers'                   => 'SureMembers\Admin\Settings_Screen',
+				'ameliabooking'                 => 'AmeliaBooking\Plugin',
 			)
 		);
 	}
@@ -656,10 +657,13 @@ final class WP_Fusion {
 			require_once WPF_DIR_PATH . 'includes/admin/class-upgrades.php';
 		}
 
-		// Plugin updater.
-
 		if ( $this->is_full_version() ) {
+
+			// Plugin updater.
 			include WPF_DIR_PATH . 'includes/admin/class-updater.php';
+
+			// Woo HPOS compatibility must be declared early.
+			require_once WPF_DIR_PATH . 'includes/integrations/class-woocommerce-hpos-compatibility.php';
 		} else {
 			require_once WPF_DIR_PATH . 'includes/admin/class-lite-helper.php';
 		}
@@ -693,7 +697,7 @@ final class WP_Fusion {
 			require_once WPF_DIR_PATH . 'includes/admin/class-admin-bar.php';
 		}
 
-		// Incoming webhooks handler.
+		// Incoming webhooks handler + WooCommerce HPOS compatibility.
 		if ( $this->is_full_version() ) {
 			require_once WPF_DIR_PATH . 'includes/integrations/class-forms-helper.php';
 			require_once WPF_DIR_PATH . 'includes/class-api.php';

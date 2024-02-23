@@ -165,9 +165,6 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 		// Maybe hide coupon field.
 		add_filter( 'woocommerce_coupons_enabled', array( $this, 'hide_coupon_field_on_cart' ) );
 
-		// Enable HPOS support.
-		add_action( 'before_woocommerce_init', array( $this, 'declare_hpos_support' ) );
-
 		// Access control. These functions are just used if Restrict Content is
 		// enabled in the main WPF settings.
 
@@ -3660,18 +3657,6 @@ class WPF_Woocommerce extends WPF_Integrations_Base {
 
 	}
 
-	/**
-	 * Declare support for High Performance Order Storage (HPOS).
-	 *
-	 * @since 3.40.45
-	 *
-	 * @link https://woocommerce.wordpress.com/2021/03/02/high-performance-order-storage-in-woocommerce-5-5/
-	 */
-	public function declare_hpos_support() {
-		if ( class_exists( '\Automattic\WooCommerce\Utilities\FeaturesUtil' ) ) {
-			\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'custom_order_tables', 'wp-fusion/wp-fusion.php', true );
-		}
-	}
 
 	/**
 	 * //

@@ -362,11 +362,11 @@ class WPF_Constant_Contact {
 			} elseif ( 409 === $response_code ) {
 
 				// Conflict.
-				$response = new WP_Error( 'error', $body_json[0]->error_message );
+				$response = new WP_Error( 'error', implode( '. ', wp_list_pluck( $body_json, 'error_message' ) ) );
 
 			} elseif ( 500 === $response_code ) {
 
-				$response = new WP_Error( 'error', __( 'An error has occurred in API server [error 500]: ' . $body_json[0]->error_message, 'wp-fusion' ) );
+				$response = new WP_Error( 'error', __( 'An error has occurred in API server [error 500]:', 'wp-fusion' ), implode( '. ', wp_list_pluck( $body_json, 'error_message' ) ) );
 
 			}
 		}

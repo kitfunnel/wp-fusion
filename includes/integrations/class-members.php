@@ -91,14 +91,14 @@ class WPF_Members_Plugin extends WPF_Integrations_Base {
 
 			$tag_id = $settings['tag_link'][0];
 
-			if ( in_array( $tag_id, $user_tags ) && ! in_array( $slug, $user->roles ) && ! user_can( $user_id, 'manage_options' ) ) {
+			if ( in_array( $tag_id, $user_tags ) && ! in_array( $slug, (array) $user->roles ) && ! user_can( $user_id, 'manage_options' ) ) {
 
 				// Logger
 				wpf_log( 'info', $user_id, 'Setting Members role <a href="' . admin_url( 'admin.php?page=roles&action=edit&role=' . $slug ) . '">' . $label . '</a> from linked tag <strong>' . wpf_get_tag_label( $tag_id ) . '</strong>' );
 
 				$user->add_role( $slug );
 
-			} elseif ( ! in_array( $tag_id, $user_tags ) && in_array( $slug, $user->roles ) && ! user_can( $user_id, 'manage_options' ) ) {
+			} elseif ( ! in_array( $tag_id, $user_tags ) && in_array( $slug, (array) $user->roles ) && ! user_can( $user_id, 'manage_options' ) ) {
 
 				// Logger
 				wpf_log( 'info', $user_id, 'Removing Members role <a href="' . admin_url( 'admin.php?page=roles&action=edit&role=' . $slug ) . '">' . $label . '</a> from linked tag <strong>' . wpf_get_tag_label( $tag_id ) . '</strong>' );

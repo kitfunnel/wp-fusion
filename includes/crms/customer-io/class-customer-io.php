@@ -164,10 +164,7 @@ class WPF_Customer_IO {
 		$payload = json_decode( file_get_contents( 'php://input' ) );
 
 		if ( $payload ) {
-
-			$post_data['contact_id'] = $payload[0]->email;
-			$post_data['tags']       = $payload[0]->contact_tags;
-
+			$post_data['contact_id'] = $payload->email;
 		}
 
 		return $post_data;
@@ -254,8 +251,8 @@ class WPF_Customer_IO {
 					s = document.getElementsByTagName('script')[0];
 				t.async = true;
 				t.id    = 'cio-tracker';
-				t.setAttribute('data-site-id', '" . $site_id . "');
-				t.src = 'https://assets.customer.io/assets/track" . $region . ".js'
+				t.setAttribute('data-site-id', '" . esc_js( $site_id ) . "');
+				t.src = 'https://assets.customer.io/assets/track" . esc_js( $region ) . ".js'
 				s.parentNode.insertBefore(t, s);
 			})();
 		</script>";
@@ -264,7 +261,7 @@ class WPF_Customer_IO {
 			echo "
 			<script>
 				_cio.identify({
-				email: '" . $email . "',
+					id: '" . esc_js( $email ) . "',
 				});
 			  </script>
 			";

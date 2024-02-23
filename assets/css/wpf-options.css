@@ -98,7 +98,7 @@
 #wpf-integrations-overview a.wpf-integration input[type="checkbox"] {
 	margin-top: 0px;
 	vertical-align: bottom;
-	border: 1px solid #e55b10;;
+	border: 1px solid #e55b10;
 }
 
 #wpf-integrations-overview a.wpf-integration input[type="checkbox"]:checked {

@@ -2915,7 +2915,7 @@ class WPF_Settings {
 
 		foreach ( wp_fusion()->integrations as $id => $integration ) {
 
-			if ( $integration->name && $integration->docs_url && ! isset( $input[ $id ] ) ) {
+			if ( $integration->name && isset( $integration->docs_url ) && ! isset( $input[ $id ] ) ) {
 				$input[ $id ] = false;
 			}
 		}

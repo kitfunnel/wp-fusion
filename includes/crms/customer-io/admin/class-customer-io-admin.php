@@ -140,7 +140,7 @@ class WPF_Customer_IO_Admin {
 
 		$site_tracking['site_tracking'] = array(
 			'title'   => __( 'Site Tracking', 'wp-fusion' ),
-			'desc'    => __( 'Enable <a target="_blank" href="https://customer.io/docs/sdk/web/getting-started/">Customer.io site tracking</a>.', 'wp-fusion' ),
+			'desc'    => __( 'Enable <a target="_blank" href="https://wpfusion.com/documentation/tutorials/site-tracking-scripts/#customer-io">Customer.io site tracking</a>.', 'wp-fusion' ),
 			'type'    => 'checkbox',
 			'section' => 'main',
 		);

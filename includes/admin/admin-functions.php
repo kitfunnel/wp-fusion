@@ -253,7 +253,7 @@ function wpf_render_crm_field_select( $setting, $meta_name, $field_id = false, $
 						if ( isset( $label['label'] ) ) {
 							$label = $label['label'];
 						} else {
-							$label = $label['remote_label']; // new 3.42.5 storage.
+							$label = $label['crm_label']; // new 3.42.5 storage.
 						}
 					}
 

@@ -143,6 +143,12 @@ class WPF_HubSpot {
 			// For date property values, it is recommended to use the ISO 8601 complete
 			// date format."
 
+			// If you try to sync an ISO formatted date to a date field you get an error
+			// "Property values were not valid 2024-01-30T01:07:09 was not a valid long".
+
+			// We have to do the timezone conversion here because *most* dates coming into
+			// this function will be UTC (like from Woo subs).
+
 			if ( ! empty( $value ) && is_numeric( $value ) && $value < 1000000000000 ) {
 
 				if ( $value % DAY_IN_SECONDS !== 0 ) {
@@ -248,7 +254,7 @@ class WPF_HubSpot {
 	 * Refresh an access token from a refresh token
 	 *
 	 * @access  public
-	 * @return  bool
+	 * @return  string|WP_Error The token on success, error on failure.
 	 */
 
 	public function refresh_token() {
@@ -276,6 +282,10 @@ class WPF_HubSpot {
 		}
 
 		$body_json = json_decode( wp_remote_retrieve_body( $response ) );
+
+		if ( ! $body_json ) {
+			return new WP_Error( 'error', 'Response was not a JSON object. <pre>' . $response['body'] . '</pre>' );
+		}
 
 		$this->get_params( $body_json->access_token );
 

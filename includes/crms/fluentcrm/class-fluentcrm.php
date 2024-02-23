@@ -313,6 +313,10 @@ class WPF_FluentCRM {
 
 		$contact = FluentCrmApi( 'contacts' )->getContact( $contact_id );
 
+		if ( ! $contact ) {
+			return new WP_Error( 'not_found', 'No contact ID #' . $contact_id . ' found in FluentCRM.' );
+		}
+
 		$tags = array();
 
 		foreach ( $contact->tags as $tag ) {
@@ -701,24 +705,41 @@ class WPF_FluentCRM {
 	 * @param  string      $event      The event title.
 	 * @param  array       $event_data The event data.
 	 * @param  bool|string $email_address The user email address.
-	 * @return bool|WP_Error True if success, WP_Error if failed.
+	 * @return bool|WP_Error|FluentCrm\App\Models\EventTracker The event tracker or error.
 	 */
-	public function track_event( $event, $event_data = false, $email_address = false ) {
+	public function track_event( $event, $event_data = array(), $email_address = false ) {
 
 		if ( empty( $email_address ) ) {
 			$email_address = wpf_get_current_user_email();
 		}
 
-		if ( ! function_exists( 'fcrm_events_add_event' ) ) {
-			return new WP_Error( 'error', 'FluentCRM Events plugin not active.' );
-		}
-
 		if ( false === $email_address ) {
-			return; // can't track without an email.
+			return false; // can't track without an email.
 		}
 
-		return fcrm_events_add_event( $email_address, 'wp_fusion', $event, $event_data );
+		if ( function_exists( 'fcrm_events_add_event' ) ) {
+			// Old WP Fusion way of doing it.
+			fcrm_events_add_event( $email_address, 'wp_fusion', $event, $event_data );
+		} else {
 
+			if ( 1 === count( $event_data ) ) {
+				$event_text = reset( $event_data );
+			} else {
+				$event_text = wp_json_encode( $event_data, JSON_NUMERIC_CHECK );
+			}
+
+			$data = array(
+				'event_key' => sanitize_title( $event ),
+				'title'     => $event,
+				'value'     => $event_text,
+				'email'     => $email_address,
+				'provider'  => 'wp_fusion', // If left empty, 'custom' will be added.
+			);
+
+			$tracker = FluentCrmApi( 'event_tracker' )->track( $data, true );
+
+			return $tracker;
+
+		}
 	}
-
 }

@@ -69,7 +69,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 		// Auto-register addon.
 		add_action( 'edd_auto_register_insert_user', array( $this, 'auto_register_insert_user' ), 10, 3 );
 
-		// Admin settings..
+		// Admin settings.
 		add_filter( 'wpf_configure_settings', array( $this, 'register_settings' ), 15, 2 );
 
 		// WPF hooks.
@@ -80,6 +80,9 @@ class WPF_EDD extends WPF_Integrations_Base {
 		// Payment status.
 		add_action( 'edd_view_order_details_sidebar_after', array( $this, 'order_details_sidebar' ) );
 		add_action( 'edd_wpf_process', array( $this, 'process_order_again' ) );
+
+		// Review tags.
+		add_action( 'edd_reviews_insert_review_args', array( $this, 'apply_review_tags' ) );
 
 		// Customer record.
 		add_action( 'edd_after_customer_edit_link', array( $this, 'customer_edit_link' ) );
@@ -100,7 +103,6 @@ class WPF_EDD extends WPF_Integrations_Base {
 		// Email optin.
 		add_action( 'edd_purchase_form_before_submit', array( $this, 'add_optin_field' ) );
 		add_action( 'edd_complete_purchase', array( $this, 'save_optin_field' ), 5, 2 );
-
 	}
 
 	/**
@@ -180,6 +182,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 	 * Registers additional EDD settings.
 	 *
 	 * @since 1.0.0
+	 * @since 3.42.10 Added EDD Left Review Tag.
 	 *
 	 * @param array $settings Settings.
 	 * @param array $options Options.
@@ -201,6 +204,16 @@ class WPF_EDD extends WPF_Integrations_Base {
 			'type'    => 'assign_tags',
 			'section' => 'integrations',
 		);
+
+		// EDD Reviews.
+		if ( class_exists( 'EDD_Reviews' ) ) {
+			$settings['edd_review_tags'] = array(
+				'title'   => __( 'Apply Tags - Left Review', 'wp-fusion' ),
+				'desc'    => __( 'Apply these tags when a user leaves a review on a product.', 'wp-fusion' ),
+				'type'    => 'assign_tags',
+				'section' => 'integrations',
+			);
+		}
 
 		$settings['edd_async'] = array(
 			'title'   => __( 'Asynchronous Checkout', 'wp-fusion' ),
@@ -264,6 +277,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 			if ( 'processing' === $status || 'pending' === $status || 'failed' === $status ) {
 
 				$settings[ 'edd_tags_' . $status ] = array(
+					/* Translators: Status Name */
 					'title'   => sprintf( __( 'Payment %s', 'wp-fusion' ), $label ),
 					'std'     => array(),
 					'type'    => 'assign_tags',
@@ -273,6 +287,7 @@ class WPF_EDD extends WPF_Integrations_Base {
 			}
 
 			$settings[ 'edd_tags_' . $status ] = array(
+				/* Translators: Status Name */
 				'title'   => sprintf( __( 'Order %s', 'wp-fusion' ), $label ),
 				'std'     => array(),
 				'type'    => 'assign_tags',
@@ -518,7 +533,23 @@ class WPF_EDD extends WPF_Integrations_Base {
 
 		// Apply tags.
 		wp_fusion()->user->apply_tags( $apply_tags, $order->user_id );
+	}
 
+	/**
+	 * Apply Review Tags.
+	 *
+	 * Applies tags when a user leaves a review.
+	 *
+	 * @since 3.42.10
+	 *
+	 * @param array $args Review arguments.
+	 */
+	public function apply_review_tags( $args ) {
+		$apply_tags = wpf_get_option( 'edd_review_tags' );
+
+		if ( ! empty( $apply_tags ) ) {
+			wp_fusion()->user->apply_tags( $apply_tags, $args['user_id'] );
+		}
 	}
 
 	/**

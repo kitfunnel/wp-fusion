@@ -543,6 +543,10 @@ jQuery(document).ready(function($){
 					var total = parseFloat(button.attr('data-total-users'));
 					syncTags(button, total, crmContainer);
 
+					// remove disabled on submit button:
+
+					$('p.submit input[type="submit"]').removeAttr('disabled');
+
 				}
 
 			});

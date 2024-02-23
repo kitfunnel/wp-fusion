@@ -267,6 +267,7 @@ class WPF_GForms_Integration extends GFFeedAddOn {
 			'integration_slug' => 'gform',
 			'integration_name' => 'Gravity Forms',
 			'form_id'          => $form['id'],
+			'entry_id'         => $entry['id'],
 			'form_title'       => $form['title'],
 			'form_edit_link'   => admin_url( 'admin.php?page=gf_edit_forms&id=' . $form['id'] ),
 		);

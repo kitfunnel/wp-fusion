@@ -882,7 +882,7 @@ class WP_Fusion_Options {
 					<?php $isfirst = false; ?>
 				<?php } ?>
 			</div>
-			<p class="submit"><input name="Submit" type="submit" class="button-primary" value="<?php esc_attr_e( 'Save Changes', 'wp-fusion' ); ?>" /></p>
+			<p class="submit"><input name="Submit" type="submit" class="button-primary" <?php disabled( ! $this->options['connection_configured'] ) ?> value="<?php esc_attr_e( 'Save Changes', 'wp-fusion' ); ?>" /></p>
 		</form>
 
 		<?php

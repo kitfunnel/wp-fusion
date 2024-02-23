@@ -206,7 +206,7 @@ class WPF_ActiveCampaign {
 
 			} elseif ( isset( $body->result_code ) && 0 === $body->result_code ) {
 
-				if ( false !== strpos( $body->result_message, 'Invalid contact ID' ) || false !== strpos( $body->result_message, 'Contact does not exist' ) ) {
+				if ( false !== strpos( $body->result_message, 'Invalid contact ID' ) || false !== strpos( $body->result_message, 'Contact does not exist' ) || false !== strpos( $body->result_message, 'Nothing is returned' ) ) {
 					$code = 'not_found';
 				} else {
 					$code = 'error';
@@ -593,7 +593,7 @@ class WPF_ActiveCampaign {
 			$this->api_url . 'admin/api.php'
 		);
 
-		$params                            = $this->params;
+		$params                            = $this->get_params();
 		$params['timeout']                 = 20;
 		$params['headers']['Content-Type'] = 'application/x-www-form-urlencoded';
 
@@ -636,7 +636,7 @@ class WPF_ActiveCampaign {
 			'tags' => $tags,
 		);
 
-		$params                            = $this->params;
+		$params                            = $this->get_params();
 		$params['timeout']                 = 20;
 		$params['body']                    = $data;
 		$params['headers']['Content-Type'] = 'application/x-www-form-urlencoded';
@@ -689,7 +689,7 @@ class WPF_ActiveCampaign {
 			'tags' => $tags,
 		);
 
-		$params                            = $this->params;
+		$params                            = $this->get_params();
 		$params['timeout']                 = 20;
 		$params['body']                    = $data;
 		$params['headers']['Content-Type'] = 'application/x-www-form-urlencoded';

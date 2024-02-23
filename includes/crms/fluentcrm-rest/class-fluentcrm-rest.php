@@ -847,14 +847,21 @@ class WPF_FluentCRM_REST {
 			return false; // can't track without an email.
 		}
 
+		if ( 1 === count( $event_data ) ) {
+			$event_text = reset( $event_data );
+		} else {
+			$event_text = wp_json_encode( $event_data, JSON_NUMERIC_CHECK );
+		}
+
 		$body = array(
-			'email' => $email_address,
-			'title' => $event,
-			'type'  => 'wp_fusion',
-			'value' => $event_data,
+			'event_key' => sanitize_title( $event ),
+			'title'     => $event,
+			'value'     => $event_text,
+			'email'     => $email_address,
+			'provider'  => 'wp_fusion', // If left empty, 'custom' will be added.
 		);
 
-		$request            = $this->url . '/events';
+		$request            = $this->url . '/subscribers/track-event';
 		$params             = $this->get_params();
 		$params['body']     = wp_json_encode( $body );
 		$params['blocking'] = false;

@@ -43,8 +43,6 @@ class WPF_Memberoni extends WPF_Integrations_Base {
 
 	public function init() {
 
-		$this->slug = 'memberoni';
-
 		add_action( 'memberoni_after_mark_complete', array( $this, 'mark_course_complete' ) );
 		add_action( 'memberoni_after_track_lesson', array( $this, 'mark_lesson_complete' ) );
 

@@ -116,7 +116,7 @@ class WPF_Formidable_Forms extends FrmFormAction {
 		?>
 		<h3 style="padding-top: 20px;"><?php _e( 'Field Mapping', 'wp-fusion' ); ?>
 			<span class="frm_help frm_icon_font frm_tooltip_icon"
-				  title="For each field in your form, select a corresponding field in <?php echo wp_fusion()->crm->name; ?> to save the entry data."</span>
+			title="For each field in your form, select a corresponding field in <?php echo wp_fusion()->crm->name; ?> to save the entry data."</span>
 		</h3>
 
 		<p>Map form fields to <?php echo wp_fusion()->crm->name; ?> fields:</p>
@@ -128,7 +128,7 @@ class WPF_Formidable_Forms extends FrmFormAction {
 
 				// Getting address fields from address. They're stored in default_value.
 				// We can check if the field isn't the billing field by checking if the field_order is the same as the field id.
-				if ( ! empty( $field->default_value ) ) {
+				if ( ! empty( $field->default_value ) && is_array( $field->default_value ) ) {
 
 					foreach ( $field->default_value as $slug => $value ) {
 
@@ -184,7 +184,7 @@ class WPF_Formidable_Forms extends FrmFormAction {
 
 		<h3 style="padding-top: 20px;"><?php _e( 'Apply Tags', 'formidable' ); ?>
 			<span class="frm_help frm_icon_font frm_tooltip_icon"
-				  title="These tags will be applied to the contact record when this form is submitted."</span>
+			title="These tags will be applied to the contact record when this form is submitted."</span>
 		</h3>
 		<table class="form-table">
 			<tr>

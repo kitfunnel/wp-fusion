@@ -466,8 +466,10 @@ class WPF_Omnisend {
 		if ( ! empty( $body->contacts ) ) {
 
 			foreach ( $body->contacts as $contact ) {
-				foreach ( $contact->{'customProperties'} as $key => $value ) {
-					$crm_fields[ $key ] = $key;
+				if ( ! empty( $contact->{'customProperties'} ) ) {
+					foreach ( $contact->{'customProperties'} as $key => $value ) {
+						$crm_fields[ $key ] = $key;
+					}
 				}
 			}
 		}
@@ -817,16 +819,18 @@ class WPF_Omnisend {
 		}
 
 		$data = array(
-			'email'      => $email_address,
-			'name'       => $event,
-			'systemName' => sanitize_title( $event ),
-			'fields'     => $event_data,
+			'contact'    => array(
+				'email' => $email_address,
+			),
+			'eventName'  => $event,
+			'origin'     => 'api',
+			'properties' => $event_data,
 		);
 
 		$params             = $this->get_params();
 		$params['body']     = wp_json_encode( $data );
 		$params['blocking'] = false;
-		$request            = 'https://api.omnisend.com/v3/events';
+		$request            = 'https://api.omnisend.com/v3/customer-events';
 		$response           = wp_safe_remote_post( $request, $params );
 
 		if ( is_wp_error( $response ) ) {

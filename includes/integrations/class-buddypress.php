@@ -1040,10 +1040,7 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 
 				$tag_id = $settings['tag_link'][0];
 
-				$user_groups    = bp_get_user_groups( $user_id );
-				$user_group_ids = wp_list_pluck( $user_groups, 'group_id' );
-
-				if ( in_array( $tag_id, $user_tags ) && ! in_array( $group->id, $user_group_ids ) ) {
+				if ( in_array( $tag_id, $user_tags ) && ! groups_is_user_member( $user_id, $group->id ) ) {
 
 					wpf_log( 'info', $user_id, 'Adding user to BuddyPress group <a href="' . admin_url( 'admin.php?page=bp-groups&gid=' . $group->id . '&action=edit' ) . '">' . $group->name . '</a>, from linked tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
 
@@ -1052,7 +1049,7 @@ class WPF_BuddyPress extends WPF_Integrations_Base {
 					if ( false === $result ) {
 						wpf_log( 'error', $user_id, 'Unknown error adding user to group. <a href="https://wpfusion.com/contact/" target="_blank">Contact WP Fusion support</a>.' );
 					}
-				} elseif ( ! in_array( $tag_id, $user_tags ) && in_array( $group->id, $user_group_ids ) ) {
+				} elseif ( ! in_array( $tag_id, $user_tags ) && groups_is_user_member( $user_id, $group->id ) ) {
 
 					wpf_log( 'info', $user_id, 'Removing user from BuddyPress group <a href="' . admin_url( 'admin.php?page=bp-groups&gid=' . $group->id . '&action=edit' ) . '">' . $group->name . '</a>, from linked tag <strong>' . wp_fusion()->user->get_tag_label( $tag_id ) . '</strong>' );
 

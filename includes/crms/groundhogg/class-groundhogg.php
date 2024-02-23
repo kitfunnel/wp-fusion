@@ -77,7 +77,7 @@ class WPF_Groundhogg {
 
 		// Don't watch GH for changes if staging mode is active.
 
-		if ( wpf_get_option( 'staging_mode' ) == true || ! class_exists( '\Groundhogg\Contact' ) ) {
+		if ( wpf_get_option( 'staging_mode' ) || ! class_exists( '\Groundhogg\Contact' ) ) {
 			return;
 		}
 
@@ -358,11 +358,7 @@ class WPF_Groundhogg {
 	public function contact_post_update( $contact_id, $contact ) {
 
 		if ( ! empty( $contact->user ) ) {
-
-			$user_meta = $this->load_contact( $contact_id );
-
-			wp_fusion()->user->set_user_meta( $contact->user->ID, $user_meta );
-
+			wp_fusion()->user->pull_user_meta( $contact->user->ID );
 		}
 
 	}
@@ -384,11 +380,7 @@ class WPF_Groundhogg {
 		$contact = new \Groundhogg\Contact( $contact_id );
 
 		if ( ! empty( $contact->user ) ) {
-
-			$user_meta = $this->load_contact( $contact_id );
-
-			wp_fusion()->user->set_user_meta( $contact->user->ID, $user_meta );
-
+			wp_fusion()->user->pull_user_meta( $contact->user->ID );
 		}
 
 	}
